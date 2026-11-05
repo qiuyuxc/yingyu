@@ -1,0 +1,230 @@
+import { test as base, expect, type Page } from '@playwright/test';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+const test = base.extend<{ checkBrowser: void }>({
+  checkBrowser: [async ({ page }, use) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    // Headless environments do not have a desktop clipboard. Check the exact
+    // copied content through this browser-local adapter instead.
+    await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (value: string) => { sessionStorage.setItem('test:clipboard', value); } },
+    }));
+    await use();
+    expect(errors).toEqual([]);
+  }, { auto: true }],
+});
+const ORIGIN = 'http://127.0.0.1:4173';
+const PASSWORD = 'browser-test-password-2026';
+
+async function navigate(page: Page, name: string, admin = false) {
+  const navigation = page.getByRole('navigation', { name: admin ? '后台导航' : '工作台导航' });
+  await expect(navigation).toBeAttached();
+  const menu = page.getByRole('button', { name: '打开导航' });
+  if (await menu.isVisible()) await menu.click();
+  await navigation.getByRole('link', { name: name === '我的图片' ? /^我的图片(?: \d+)?$/ : name, exact: true }).click();
+}
+async function screenshot(page: Page, name: string) {
+  if (process.env.CAPTURE_SCREENSHOTS !== '1') return;
+  await mkdir('artifacts', { recursive: true });
+  await page.screenshot({ path: 'artifacts/' + name + '.png', fullPage: true, animations: 'disabled' });
+}
+async function noHorizontalOverflow(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+}
+
+test('home page renders at 11px with working theme and FAQ controls', async ({ page }, info) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /让图片，\s*自由流动。/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: '开始使用' })).toBeVisible();
+  expect(await page.evaluate(() => getComputedStyle(document.body).fontSize)).toBe('11px');
+  await expect(page.locator('.showcase-frame.active img').first()).toBeVisible();
+  await expect.poll(() => page.locator('.showcase-frame.active img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+  await expect(page.getByRole('button', { name: '显示第 2 组示例图片' })).toHaveAttribute('aria-pressed', 'true', { timeout: 8000 });
+  await page.getByRole('button', { name: '暂停图片轮播' }).click();
+  await page.getByRole('button', { name: '下一组示例图片' }).click();
+  await expect(page.getByRole('button', { name: '显示第 3 组示例图片' })).toHaveAttribute('aria-pressed', 'true');
+  await noHorizontalOverflow(page);
+  await screenshot(page, info.project.name + '-home-light');
+  await page.getByRole('button', { name: '切换深色外观' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await screenshot(page, info.project.name + '-home-dark');
+  await page.locator('summary').filter({ hasText: '扩容需要付费吗？' }).click();
+  await expect(page.locator('details[open]')).toContainText('不需要');
+  await page.getByRole('button', { name: '切换浅色外观' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  const scrollPastGallery = () => page.locator('.hero-visual').evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    window.scrollTo({ top: window.scrollY + rect.top + rect.height * .25, behavior: 'instant' });
+  });
+  await scrollPastGallery();
+  await expect.poll(() => page.locator('.hero-gallery').evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThan(.7);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('.hero-gallery')).toHaveCSS('opacity', '1');
+  await expect(page.getByRole('button', { name: '播放图片轮播' })).toHaveCount(0);
+  await page.getByRole('button', { name: '上一组示例图片' }).click();
+  await expect(page.getByRole('button', { name: '显示第 2 组示例图片' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('register, create an album, upload images, filter, edit, favorite and delete', async ({ page }, info) => {
+  const name = '创作者-' + info.project.name;
+  await page.goto('/register');
+  await page.getByLabel('你的名字', { exact: true }).fill(name);
+  await page.getByLabel('邮箱地址', { exact: true }).fill(info.project.name + '-' + Date.now() + '@example.test');
+  await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
+  await page.getByRole('button', { name: '创建我的小岛' }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  const announcement = page.getByRole('complementary', { name: '站点公告' });
+  await expect(announcement).toBeVisible();
+  await page.getByRole('button', { name: '关闭公告' }).click();
+  await expect(announcement).toHaveCount(0);
+  await page.reload();
+  await expect(announcement).toBeVisible();
+  await navigate(page, '我的相册');
+  await expect(announcement).toHaveCount(0);
+  await page.getByRole('button', { name: '新建相册' }).click();
+  await page.getByLabel('相册名称').fill('山野来信');
+  await page.getByRole('button', { name: '创建相册', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '山野来信' })).toBeVisible();
+  await navigate(page, '上传图片');
+  await expect(announcement).toHaveCount(0);
+  await page.getByLabel('保存到相册').selectOption({ label: '山野来信' });
+  await page.getByRole('button', { name: /私密.*仅自己和管理员可见/ }).click();
+  await page.getByLabel('选择上传图片').setInputFiles(resolve('public/samples/forest.jpg'));
+  await page.getByRole('button', { name: '开始上传' }).click();
+  await expect(page.locator('.queue-row.done')).toHaveCount(1);
+  await expect(page.getByLabel('成功上传的图片链接')).toHaveValue(/\/i\//);
+  await page.getByRole('button', { name: /公开.*可通过外链分享/ }).click();
+  await page.getByLabel('选择上传图片').setInputFiles(resolve('public/samples/lake.jpg'));
+  await page.getByRole('button', { name: '开始上传' }).click();
+  await expect(page.locator('.queue-row.done')).toHaveCount(2);
+  await screenshot(page, info.project.name + '-upload');
+  await navigate(page, '我的图片');
+  await expect(page.locator('.image-card')).toHaveCount(2);
+  await expect(page.getByRole('complementary', { name: '站点公告' })).toBeVisible();
+  await page.getByLabel('筛选可见性').selectOption('private');
+  await expect(page.locator('.image-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '列表视图' }).click();
+  await expect(page.locator('.image-table tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: '网格视图' }).click();
+  await page.getByRole('button', { name: '查看图片 forest.jpg', exact: true }).click();
+  const detail = page.getByRole('dialog', { name: '图片详情' });
+  await detail.getByLabel('图片名称').fill('forest-renamed.jpg');
+  await detail.getByRole('combobox', { name: /^可见性/ }).selectOption('public');
+  await detail.getByRole('button', { name: '保存修改' }).click();
+  await expect(detail.getByLabel('图片名称')).toHaveValue('forest-renamed.jpg');
+  await detail.getByRole('button', { name: '收藏图片', exact: true }).click();
+  await expect(detail.getByRole('button', { name: '取消收藏', exact: true })).toBeVisible();
+  await detail.getByRole('button', { name: 'Markdown', exact: true }).click();
+  await expect(detail.getByLabel('图片分享链接')).toHaveValue(/!\[\]\(http/);
+  await detail.getByRole('button', { name: '复制链接', exact: true }).click();
+  await expect(page.locator('.toast').filter({ hasText: '链接已复制' }).first()).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem('test:clipboard'))).toBe(await detail.getByLabel('图片分享链接').inputValue());
+  await detail.getByRole('button', { name: '关闭对话框' }).click();
+  await navigate(page, '收藏夹');
+  await expect(announcement).toHaveCount(0);
+  await expect(page.locator('.image-card')).toHaveCount(1);
+  await noHorizontalOverflow(page);
+  await screenshot(page, info.project.name + '-gallery-light');
+  await page.getByRole('button', { name: '切换深色外观' }).click();
+  await screenshot(page, info.project.name + '-gallery-dark');
+  await page.getByRole('button', { name: '查看图片 forest-renamed.jpg', exact: true }).click();
+  await page.getByRole('button', { name: '删除图片', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.locator('.image-card')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '暂无收藏图片' })).toBeVisible();
+  await navigate(page, '账户设置');
+  await page.getByRole('button', { name: '系统黑白', exact: true }).click();
+  await page.getByRole('button', { name: '深色', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'mono');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.reload();
+  await expect(page.getByRole('button', { name: '系统黑白', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '深色', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: '雾蓝', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'blue');
+  await page.getByRole('button', { name: '跟随系统', exact: true }).click();
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await noHorizontalOverflow(page);
+});
+
+test('administrator approves free expansion, adjusts quota, checks storage and publishes an announcement', async ({ page, request }, info) => {
+  const name = '扩容用户-' + info.project.name;
+  const registered = await request.post('/api/auth/register', { headers: { Origin: ORIGIN }, data: { name, email: 'quota-' + info.project.name + '-' + Date.now() + '@example.test', password: PASSWORD } });
+  expect(registered.status()).toBe(201);
+  const user = (await registered.json()).user;
+  const application = await request.post('/api/quota/requests', { headers: { Origin: ORIGIN }, data: { requestedBytes: 2 * 1024 ** 3, reason: '保存个人摄影作品' } });
+  expect(application.status()).toBe(201);
+  await page.goto('/login');
+  await page.getByLabel('邮箱地址', { exact: true }).fill('admin@example.test');
+  await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
+  await page.getByRole('button', { name: '登录我的空间' }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await navigate(page, '管理后台');
+  await expect(page.getByRole('heading', { name: '站点概览' })).toBeVisible();
+  await navigate(page, '扩容申请', true);
+  const card = page.locator('.admin-request-card').filter({ hasText: name });
+  await card.getByRole('button', { name: '通过', exact: true }).click();
+  await page.getByLabel('实际分配的总额度').fill('3');
+  await page.getByLabel('审核意见').fill('已为摄影作品扩容');
+  await page.getByRole('button', { name: '确认分配' }).click();
+  await expect(card).toHaveCount(0);
+  expect((await (await request.get('/api/auth/me')).json()).user.quotaBytes).toBe(3 * 1024 ** 3);
+  await navigate(page, '用户管理', true);
+  await page.getByLabel('搜索用户').fill(name);
+  await page.getByRole('button', { name: '管理用户 ' + name }).click();
+  await page.getByLabel('存储总配额').fill('4');
+  await page.getByLabel('额度标签').fill('摄影创作额度');
+  await page.getByRole('button', { name: '保存调配' }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  const updated = await (await request.get('/api/auth/me')).json();
+  expect(updated.user.id).toBe(user.id);
+  expect(updated.user.quotaBytes).toBe(4 * 1024 ** 3);
+  await navigate(page, '存储管理', true);
+  await page.getByRole('button', { name: '测试连接' }).click();
+  await expect(page.locator('.connection-result')).toContainText('写入、读取和删除均正常');
+  await noHorizontalOverflow(page);
+  await screenshot(page, info.project.name + '-admin-storage');
+  await navigate(page, '站点设置', true);
+  const announcement = '欢迎来到映屿，免费扩容由管理员按需分配。';
+  await page.getByLabel('站点公告').fill(announcement);
+  await page.getByRole('button', { name: '保存站点设置' }).click();
+  await expect(page.locator('.toast').filter({ hasText: '站点设置已保存' })).toBeVisible();
+  await navigate(page, '站点概览', true);
+  await screenshot(page, info.project.name + '-admin-overview');
+  await navigate(page, '返回我的空间', true);
+  await expect(page.getByRole('complementary', { name: '站点公告' })).toContainText(announcement);
+});
+
+test('mail configuration retains masked credentials and invalid email links show actionable errors', async ({ page }) => {
+  await page.goto('/login');
+  await page.getByLabel('邮箱地址', { exact: true }).fill('admin@example.test');
+  await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
+  await page.getByRole('button', { name: '登录我的空间' }).click();
+  await navigate(page, '管理后台');
+  await navigate(page, '邮件设置', true);
+  await page.getByLabel('SMTP 主机', { exact: true }).fill('smtp.example.test');
+  await page.getByLabel('SMTP 密码 / 授权码').fill('local-test-smtp-credential');
+  await page.getByLabel('发件邮箱', { exact: true }).fill('sender@example.test');
+  await page.getByRole('button', { name: '保存邮件设置' }).click();
+  await expect(page.locator('.toast').filter({ hasText: '邮件设置已保存' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('SMTP 主机', { exact: true })).toHaveValue('smtp.example.test');
+  await expect(page.getByLabel('SMTP 密码 / 授权码')).toHaveValue('');
+  await expect(page.getByLabel('SMTP 密码 / 授权码')).toHaveAttribute('placeholder', '已设置，留空保留');
+  await expect(page.getByRole('button', { name: '发送测试邮件', exact: true })).toBeDisabled();
+  await noHorizontalOverflow(page);
+  await page.goto('/verify-email#token=' + 'x'.repeat(43));
+  await page.getByRole('button', { name: '确认验证邮箱' }).click();
+  await expect(page.getByRole('alert')).toContainText('验证链接无效或已过期');
+  await page.goto('/reset-password#token=' + 'x'.repeat(43));
+  await page.getByLabel('新密码', { exact: true }).fill(PASSWORD);
+  await page.getByLabel('确认新密码', { exact: true }).fill(PASSWORD);
+  await page.getByRole('button', { name: '保存新密码' }).click();
+  await expect(page.getByRole('alert')).toContainText('重置链接无效或已过期');
+  await expect(page.getByRole('link', { name: '重新申请重置链接' })).toBeVisible();
+});
