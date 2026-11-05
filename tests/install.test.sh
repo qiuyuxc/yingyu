@@ -52,8 +52,12 @@ case "$1" in
   up)
     [[ ${TASK_FAIL_UP:-0} == 0 ]] || exit 32
     printf running > "$TASK_DOCKER_STATE"
-    cp "$TASK_IMAGE_TAG" "$TASK_IMAGE_CONTAINER" ;;
-  start) printf running > "$TASK_DOCKER_STATE" ;;
+    if [[ $* != *'--no-recreate'* || ! -f $TASK_IMAGE_CONTAINER ]]; then
+      cp "$TASK_IMAGE_TAG" "$TASK_IMAGE_CONTAINER"
+    fi ;;
+  start)
+    [[ $* != *'--wait'* ]] || exit 36
+    printf running > "$TASK_DOCKER_STATE" ;;
   stop) printf stopped > "$TASK_DOCKER_STATE" ;;
   ps)
     if [[ $* == *'--status running'* ]]; then
@@ -176,8 +180,9 @@ unset TASK_FAIL_UP
 check test "$(git -C "$TASK_INSTALL" rev-parse HEAD)" = "$TASK_THIRD_REVISION"
 check test "$(sha256sum "$TASK_INSTALL/.env")" = "$TASK_ENV_HASH"
 check rg -q '未通过健康检查' "$TASK_RESULT"
-TASK_RECOVERY_ARCHIVES=("$TASK_INSTALL"/backups/*/data.tar.gz)
-TASK_LAST_BACKUP="${TASK_RECOVERY_ARCHIVES[-1]%/data.tar.gz}"
+# Random suffixes do not sort chronologically when snapshots share a second.
+TASK_LAST_BACKUP="$(sed -n 's/^备份已保存：//p' "$TASK_RESULT")"
+check test -f "$TASK_LAST_BACKUP/data.tar.gz"
 check test "$(cat "$TASK_LAST_BACKUP/revision")" = "$TASK_SECOND_REVISION"
 installer start
 check test "$(cat "$TASK_DOCKER_STATE")" = running

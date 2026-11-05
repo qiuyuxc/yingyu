@@ -71,7 +71,9 @@ jobs:
           docker exec "$task_container_id" sh -c 'test -s /app/LICENSE && test -s /app/NOTICE && test -s /app/THIRD_PARTY_NOTICES.txt'
       - name: Verify persistent data backup
         run: |
+          task_original_container="$(docker compose ps --quiet yingyu)"
           bash install.sh backup --dir "$PWD"
+          test "$(docker compose ps --quiet yingyu)" = "$task_original_container"
           task_backup_archives=(backups/*/data.tar.gz)
           task_backup_archive="${task_backup_archives[0]}"
           tar -tzf "$task_backup_archive"

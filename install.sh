@@ -73,6 +73,11 @@ require realpath
 YINGYU_DIR="$(realpath -m -- "$YINGYU_DIR")"
 [[ $YINGYU_DIR != / && $YINGYU_DIR != "$HOME" ]] || die '请选择独立的安装目录'
 compose() { docker compose --project-directory "$YINGYU_DIR" --env-file "$YINGYU_DIR/.env" -f "$YINGYU_DIR/compose.yaml" "$@"; }
+resume_writer() {
+  # Compose versions that support `up --wait` may not support it on `start`.
+  # Keep the existing container and image when resuming after a snapshot.
+  compose up -d --no-recreate --no-build --wait --wait-timeout 180 yingyu
+}
 cleanup() {
   local result=$?
   if [[ $result -ne 0 && -n $YINGYU_ROLLBACK_REVISION ]]; then
@@ -82,7 +87,7 @@ cleanup() {
     fi
   fi
   if [[ $YINGYU_RESTART == 1 ]]; then
-    compose start --wait --wait-timeout 180 yingyu >&2 || printf '请运行 start 命令重新启动服务。\n' >&2
+    resume_writer >&2 || printf '请运行 start 命令重新启动服务。\n' >&2
   fi
   if [[ -n $YINGYU_TEMP_FILE ]]; then rm -f -- "$YINGYU_TEMP_FILE"; fi
   return "$result"
@@ -255,7 +260,7 @@ case "$YINGYU_ACTION" in
   backup)
     check_checkout; check_config
     snapshot "$(git -C "$YINGYU_DIR" rev-parse HEAD)"
-    if [[ $YINGYU_RESTART == 1 ]]; then compose start --wait --wait-timeout 180 yingyu; YINGYU_RESTART=0; fi
+    if [[ $YINGYU_RESTART == 1 ]]; then resume_writer; YINGYU_RESTART=0; fi
     ;;
   admin) check_checkout; check_config; initialize_admin ;;
   start) check_checkout; check_config; compose up -d --wait --wait-timeout 180 ;;
