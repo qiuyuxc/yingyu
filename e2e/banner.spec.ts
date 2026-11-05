@@ -6,7 +6,7 @@ const PASSWORD = 'browser-test-password-2026';
 
 test('small announcement dismissals survive reloads and tabs, stay per account and reset for new content', async ({ page, context, request }, info) => {
   test.setTimeout(60_000);
-  const admin = await request.post('/api/auth/login', { headers: { Origin: ORIGIN }, data: { email: 'admin@example.test', password: PASSWORD } });
+  const admin = await request.post('/api/auth/login', { headers: { Origin: ORIGIN }, data: { email: `banner-admin-${info.project.name}@example.test`, password: PASSWORD } });
   expect(admin.status()).toBe(200);
   const original = (await (await request.get('/api/site')).json()).settings.announcement;
   const update = async (announcement: string) => {
