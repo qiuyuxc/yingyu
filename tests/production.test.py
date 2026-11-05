@@ -3,6 +3,7 @@
 import json
 import os
 import pty
+import re
 import secrets
 import select
 import socket
@@ -98,8 +99,18 @@ class ProductionTest(unittest.TestCase):
                         time.sleep(0.1)
                 with urllib.request.urlopen(origin + "/app/settings") as response:
                     self.assertEqual(response.status, 200)
-                    self.assertIn('id="root"', response.read().decode())
+                    html = response.read().decode()
+                    self.assertIn('id="root"', html)
                     self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+                script = re.search(r'<script[^>]+src="([^"]+)"', html)
+                self.assertIsNotNone(script, "production JavaScript entry is missing")
+                with urllib.request.urlopen(origin + script.group(1)) as response:
+                    self.assertIn("/third-party-notices.txt", response.read().decode(), "the minifier removed the license reference")
+                with urllib.request.urlopen(origin + "/third-party-notices.txt") as response:
+                    notices = response.read().decode()
+                    self.assertIn("Apache License", notices)
+                    self.assertIn("react@", notices)
+                    self.assertIn("Unsplash", notices)
                 request = urllib.request.Request(
                     origin + "/api/auth/login",
                     data=json.dumps({"email": "deployment-smoke@example.test", "password": password}).encode(),

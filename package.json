@@ -2,6 +2,7 @@
   "name": "yingyu-image-host",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -10,7 +11,9 @@
     "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch server/index.ts",
     "dev:web": "vite --host 0.0.0.0",
-    "build": "tsc --noEmit && vite build && tsc -p tsconfig.server.json",
+    "build": "npm run licenses:check && tsc --noEmit && vite build && tsc -p tsconfig.server.json",
+    "licenses:update": "node scripts/licenses.mjs --write",
+    "licenses:check": "node scripts/licenses.mjs --check",
     "start": "node --env-file-if-exists=.env dist-server/server/index.js",
     "setup": "tsx server/setup.ts",
     "setup:production": "node --env-file-if-exists=.env dist-server/server/setup.js",

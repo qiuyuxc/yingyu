@@ -14,6 +14,8 @@ YINGYU_SKIP_ADMIN=0
 YINGYU_INSTALL_DOCKER=0
 YINGYU_RESTART=0
 YINGYU_ROLLBACK_REVISION=
+YINGYU_PREVIOUS_IMAGE=
+YINGYU_PREVIOUS_IMAGE_NAME=
 YINGYU_TEMP_FILE=
 YINGYU_BACKUP_PATH=
 
@@ -75,9 +77,12 @@ cleanup() {
   local result=$?
   if [[ $result -ne 0 && -n $YINGYU_ROLLBACK_REVISION ]]; then
     git -C "$YINGYU_DIR" reset --keep "$YINGYU_ROLLBACK_REVISION" >/dev/null || printf '请检查更新前的版本：%s\n' "$YINGYU_ROLLBACK_REVISION" >&2
+    if [[ -n $YINGYU_PREVIOUS_IMAGE && -n $YINGYU_PREVIOUS_IMAGE_NAME ]]; then
+      docker image tag "$YINGYU_PREVIOUS_IMAGE" "$YINGYU_PREVIOUS_IMAGE_NAME" || printf '请检查更新前的镜像：%s\n' "$YINGYU_PREVIOUS_IMAGE" >&2
+    fi
   fi
   if [[ $YINGYU_RESTART == 1 ]]; then
-    compose start yingyu >&2 || printf '请运行 start 命令重新启动服务。\n' >&2
+    compose start --wait --wait-timeout 180 yingyu >&2 || printf '请运行 start 命令重新启动服务。\n' >&2
   fi
   if [[ -n $YINGYU_TEMP_FILE ]]; then rm -f -- "$YINGYU_TEMP_FILE"; fi
   return "$result"
@@ -227,6 +232,10 @@ case "$YINGYU_ACTION" in
     [[ -z $(git -C "$YINGYU_DIR" status --porcelain) ]] || die '仓库有本地修改，请先保存后再更新；.env 和 backups 不受影响'
     [[ $(git -C "$YINGYU_DIR" symbolic-ref --short HEAD) == "$YINGYU_BRANCH" ]] || die "请先切换到 $YINGYU_BRANCH 分支"
     YINGYU_OLD_REVISION="$(git -C "$YINGYU_DIR" rev-parse HEAD)"
+    YINGYU_CONTAINER="$(compose ps --all --quiet yingyu)"
+    [[ -n $YINGYU_CONTAINER ]] || die '没有已部署的服务，请先运行 install'
+    YINGYU_PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' "$YINGYU_CONTAINER")"
+    YINGYU_PREVIOUS_IMAGE_NAME="$(docker inspect --format '{{.Config.Image}}' "$YINGYU_CONTAINER")"
     git -C "$YINGYU_DIR" fetch origin "$YINGYU_BRANCH"
     git -C "$YINGYU_DIR" merge-base --is-ancestor "$YINGYU_OLD_REVISION" FETCH_HEAD || die '本地历史与远端分叉，请先处理 Git 分支'
     YINGYU_ROLLBACK_REVISION="$YINGYU_OLD_REVISION"
@@ -246,7 +255,7 @@ case "$YINGYU_ACTION" in
   backup)
     check_checkout; check_config
     snapshot "$(git -C "$YINGYU_DIR" rev-parse HEAD)"
-    if [[ $YINGYU_RESTART == 1 ]]; then compose start yingyu; YINGYU_RESTART=0; fi
+    if [[ $YINGYU_RESTART == 1 ]]; then compose start --wait --wait-timeout 180 yingyu; YINGYU_RESTART=0; fi
     ;;
   admin) check_checkout; check_config; initialize_admin ;;
   start) check_checkout; check_config; compose up -d --wait --wait-timeout 180 ;;

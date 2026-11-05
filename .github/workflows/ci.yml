@@ -64,10 +64,11 @@ jobs:
       - name: Verify production container
         run: |
           task_container_id="$(docker compose ps --quiet yingyu)"
-          curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:18787/api/health
+          curl --fail --silent --show-error --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:18787/api/health
           test "$(docker exec "$task_container_id" id -u)" = 1000
           docker exec "$task_container_id" node -e "fetch('http://127.0.0.1:8787/app/settings').then(async r=>{require('node:assert/strict').equal(r.status,200);require('node:assert/strict').ok((await r.text()).includes('id=\"root\"'))})"
           test "$(docker exec "$task_container_id" node -e "console.log(require('node:fs').existsSync('/app/.env'))")" = false
+          docker exec "$task_container_id" sh -c 'test -s /app/LICENSE && test -s /app/NOTICE && test -s /app/THIRD_PARTY_NOTICES.txt'
       - name: Verify persistent data backup
         run: |
           bash install.sh backup --dir "$PWD"
@@ -75,7 +76,7 @@ jobs:
           task_backup_archive="${task_backup_archives[0]}"
           tar -tzf "$task_backup_archive"
           cmp .env "${task_backup_archive%/data.tar.gz}/.env"
-          curl --fail --silent --show-error --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:18787/api/health
+          curl --fail --silent --show-error --retry 20 --retry-all-errors --retry-delay 1 http://127.0.0.1:18787/api/health
       - name: Container logs
         if: failure()
         run: if test -f .env; then docker compose logs --tail 100; fi

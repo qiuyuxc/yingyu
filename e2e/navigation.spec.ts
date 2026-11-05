@@ -99,6 +99,10 @@ test('tour follows real upload actions, waits for successful upload and copying,
   await expect(page.locator('.toast.error')).toBeVisible();
   await expect(page).toHaveURL(/\/app$/);
   await page.unroute('**/api/auth/logout');
+  // Disabling the logout item may blur it; close via a pointer action before retrying.
+  await page.getByRole('heading', { name: '我的图片', exact: true }).click();
+  await expect(menu).toHaveCount(0);
+  await trigger.click();
   await menu.getByRole('menuitem', { name: '退出登录' }).click();
   await expect(page).toHaveURL(/\/login\?next=/);
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);

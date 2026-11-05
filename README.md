@@ -8,6 +8,10 @@ React 实现的 MIUIX 风格紧凑界面，配合通透玻璃面板。提供系�
 
 源码：[qiuyuxc/yingyu](https://github.com/qiuyuxc/yingyu)。
 
+原创代码使用 [Apache License 2.0](LICENSE)，允许商业使用、修改和分发，保留版权、许可及必要声明。第三方依赖使用各自原有许可，完整文本及版权说明见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。示例照片适用 Unsplash License，来源记录在 [public/samples/README.md](public/samples/README.md)。
+
+生产网页在 `/third-party-notices.txt` 提供项目许可及第三方声明，Docker 镜像也保留这些文件。更新依赖或示例图后运行 `npm run licenses:update`，将更新后的声明一起提交；生产构建会检查声明是否与当前依赖一致。
+
 ## 一键部署
 
 准备一台 Linux 服务器和一个指向它的域名。需要 Git、curl、OpenSSL、tar；脚本使用 Docker Engine 与 Compose v2，添加 `--install-docker` 可在缺少 Docker 时通过官方安装脚本安装。
@@ -46,7 +50,7 @@ sudo bash /opt/yingyu/install.sh backup --dir /opt/yingyu
 sudo bash /opt/yingyu/install.sh update --dir /opt/yingyu
 ```
 
-更新要求 Git 工作区干净，使用 `main` 分支的快进更新。先构建新镜像，再短暂停止应用，保存更新前的数据库、本地对象和 `.env`，然后启动新版并等待健康检查。构建或备份失败时保留原服务；开始数据库迁移后的启动失败会保留快照及新版源码，便于查看日志排查。数据库升级在启动时自动完成。
+更新要求 Git 工作区干净，使用 `main` 分支的快进更新。先构建新镜像，再短暂停止应用，保存更新前的数据库、本地对象和 `.env`，然后启动新版并等待健康检查。构建或备份失败时还原源码及原镜像引用，保留原服务；开始数据库迁移后的启动失败会保留快照及新版源码，便于查看日志排查。数据库升级在启动时自动完成。
 
 快照保存在 `backups/时间-随机标识/`，目录权限为 `700`，包含：
 
@@ -245,4 +249,5 @@ tests/           后端测试与浏览器测试启动器
 e2e/             Playwright 用户及管理员流程
 deploy/          Caddy HTTPS 配置
 install.sh       Docker 安装、更新、备份与管理员初始化
+scripts/         第三方许可声明生成与检查
 ```

@@ -13,6 +13,7 @@ RUN npm ci --omit=dev && npm cache clean --force \
     && mkdir -p /app/data && chown node:node /app/data
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/dist-server ./dist-server
+COPY --chown=node:node LICENSE NOTICE THIRD_PARTY_NOTICES.txt ./
 USER node
 EXPOSE 8787
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=4 \

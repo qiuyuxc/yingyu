@@ -10,6 +10,9 @@ TASK_ORIGIN="$TASK_ROOT/origin"
 TASK_RESULT="$TASK_ROOT/result"
 export TASK_DOCKER_LOG="$TASK_ROOT/docker.log"
 export TASK_DOCKER_STATE="$TASK_ROOT/docker.state"
+export TASK_IMAGE_TAG="$TASK_ROOT/image.tag"
+export TASK_IMAGE_CONTAINER="$TASK_ROOT/image.container"
+export TASK_IMAGE_SEQUENCE="$TASK_ROOT/image.sequence"
 export TASK_VOLUME="$TASK_ROOT/volume"
 mkdir -p "$TASK_ORIGIN" "$TASK_ROOT/bin" "$TASK_VOLUME/data/objects"
 printf 'database fixture\n' > "$TASK_VOLUME/data/yingyu.sqlite"
@@ -29,15 +32,27 @@ cat > "$TASK_ROOT/bin/docker" <<'DOCKER'
 set -Eeuo pipefail
 printf '%s\n' "$*" >> "$TASK_DOCKER_LOG"
 if [[ $1 == info ]]; then exit 0; fi
+if [[ $1 == inspect ]]; then
+  if [[ $3 == '{{.Image}}' ]]; then cat "$TASK_IMAGE_CONTAINER"; else printf 'fixture:local'; fi
+  exit 0
+fi
+if [[ $1 == image && $2 == tag ]]; then printf '%s' "$3" > "$TASK_IMAGE_TAG"; exit 0; fi
 [[ $1 == compose ]] || exit 1
 shift
 while [[ $1 == --project-directory || $1 == --env-file || $1 == -f ]]; do shift 2; done
 case "$1" in
   version|config) ;;
-  build) [[ ${TASK_FAIL_BUILD:-0} == 0 ]] || exit 31 ;;
+  build)
+    [[ ${TASK_FAIL_BUILD:-0} == 0 ]] || exit 31
+    task_sequence=0
+    if [[ -f $TASK_IMAGE_SEQUENCE ]]; then task_sequence="$(cat "$TASK_IMAGE_SEQUENCE")"; fi
+    task_sequence=$((task_sequence + 1))
+    printf '%s' "$task_sequence" > "$TASK_IMAGE_SEQUENCE"
+    printf 'fixture-image-%s' "$task_sequence" > "$TASK_IMAGE_TAG" ;;
   up)
     [[ ${TASK_FAIL_UP:-0} == 0 ]] || exit 32
-    printf running > "$TASK_DOCKER_STATE" ;;
+    printf running > "$TASK_DOCKER_STATE"
+    cp "$TASK_IMAGE_TAG" "$TASK_IMAGE_CONTAINER" ;;
   start) printf running > "$TASK_DOCKER_STATE" ;;
   stop) printf stopped > "$TASK_DOCKER_STATE" ;;
   ps)
@@ -127,7 +142,7 @@ check test "$(git -C "$TASK_INSTALL" rev-parse HEAD)" = "$TASK_SECOND_REVISION"
 check test "$(sha256sum "$TASK_INSTALL/.env")" = "$TASK_ENV_HASH"
 check test "$(archive_count)" -eq "$((TASK_BEFORE_BACKUPS + 1))"
 check test "$(cat "$TASK_DOCKER_STATE")" = running
-passed 'updates fast-forward after building, snapshot the previous release and preserve credentials'
+passed 'updates build before stopping, snapshot the previous release and preserve credentials'
 
 printf 'local edit\n' >> "$TASK_INSTALL/release.txt"
 expect_failure installer update
@@ -152,6 +167,7 @@ expect_failure installer update
 unset TASK_FAIL_TAR
 check test "$(git -C "$TASK_INSTALL" rev-parse HEAD)" = "$TASK_SECOND_REVISION"
 check test "$(cat "$TASK_DOCKER_STATE")" = running
+check cmp "$TASK_IMAGE_TAG" "$TASK_IMAGE_CONTAINER"
 passed 'an update snapshot failure restores the previous checkout and service'
 
 export TASK_FAIL_UP=1
