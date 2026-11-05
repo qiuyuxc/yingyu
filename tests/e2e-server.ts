@@ -22,7 +22,7 @@ const db = openDatabase(dataDir);
 const passwordHash = await hashPassword('browser-test-password-2026');
 insertUser(db, { email: 'admin@example.test', name: '岛屿管理员', role: 'admin', passwordHash });
 for (const device of ['desktop', 'mobile']) {
-  for (const identity of ['tour-a', 'tour-b', 'gesture', 'notice', 'email-change']) {
+  for (const identity of ['tour-a', 'tour-b', 'gesture', 'notice', 'email-change', 'banner-a', 'banner-b']) {
     insertUser(db, { email: `${identity}-${device}@example.test`, name: '引导用户', passwordHash });
   }
 }

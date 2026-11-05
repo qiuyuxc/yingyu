@@ -146,7 +146,8 @@ test('register, create an album, upload images, filter, edit, favorite and delet
   await page.getByRole('button', { name: '关闭公告' }).click();
   await expect(announcement).toHaveCount(0);
   await page.reload();
-  await expect(announcement).toBeVisible();
+  await expect(page.getByRole('heading', { name: '我的图片', exact: true })).toBeVisible();
+  await expect(announcement).toHaveCount(0);
   await navigate(page, '我的相册');
   await expect(announcement).toHaveCount(0);
   await page.getByRole('button', { name: '新建相册' }).click();
@@ -168,7 +169,7 @@ test('register, create an album, upload images, filter, edit, favorite and delet
   await screenshot(page, info.project.name + '-upload');
   await navigate(page, '我的图片');
   await expect(page.locator('.image-card')).toHaveCount(2);
-  await expect(page.getByRole('complementary', { name: '站点公告' })).toBeVisible();
+  await expect(announcement).toHaveCount(0);
   await page.getByLabel('筛选可见性').selectOption('private');
   await expect(page.locator('.image-card')).toHaveCount(1);
   await page.getByRole('button', { name: '列表视图' }).click();
