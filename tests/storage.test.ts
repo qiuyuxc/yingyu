@@ -2,8 +2,29 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
-import { createStore, validateStorage } from '../server/storage.js';
+import { createStore, validateStorage, publicObjectUrl } from '../server/storage.js';
+import { encryptConfig } from '../server/security.js';
+import { now, type Row } from '../server/db.js';
 import { fixture, PNG, readRequest, webdav } from './helpers.js';
+
+test('public images use a configured acceleration prefix while private images keep authenticated reads',async t=>{
+  const f=await fixture(t),user=await f.user();
+  const config={endpoint:'https://'+'a'.repeat(32)+'.r2.cloudflarestorage.com',bucket:'images',accessKeyId:'test-id',secretAccessKey:'test-secret',publicBaseUrl:'https://images.example.test/cache/prefix/'};
+  validateStorage('r2',config);
+  assert.equal(publicObjectUrl(config.publicBaseUrl,'user/test.png'),'https://images.example.test/cache/prefix/user/test.png');
+  for(const url of ['http://images.example.test','https://name:secret@images.example.test','https://images.example.test/?token=secret','javascript:alert(1)']) assert.throws(()=>validateStorage('r2',{...config,publicBaseUrl:url}));
+  const uploaded=await f.upload(user.cookie);
+  const image=(await uploaded.json()).image;
+  f.db.prepare("INSERT INTO storage_providers(id,name,kind,config,active,created_at) VALUES('cdn','R2','r2',?,0,?)").run(encryptConfig(config,f.config.encryptionKey),now());
+  f.db.prepare("UPDATE images SET storage_id='cdn' WHERE id=?").run(image.id);
+  const response=await f.request('/i/'+image.id);
+  assert.equal(response.status,302);assert.equal(response.headers.get('cache-control'),'no-store');
+  const row=f.db.prepare('SELECT object_key FROM images WHERE id=?').get(image.id) as Row;
+  assert.equal(response.headers.get('location'),publicObjectUrl(config.publicBaseUrl,row.object_key));
+  f.db.prepare("UPDATE images SET visibility='private' WHERE id=?").run(image.id);
+  const privateResponse=await f.request('/i/'+image.id);
+  assert.equal(privateResponse.status,401);assert.equal(privateResponse.headers.get('location'),null);
+});
 
 test('local objects round-trip, cannot be overwritten, and reject traversal paths', async t => {
   const f = await fixture(t);

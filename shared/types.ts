@@ -16,7 +16,24 @@ export interface User {
   imageCount: number;
   tier: string;
   createdAt: string;
+  avatarUrl: string | null;
+  avatarLibraryEnabled: boolean;
+  avatarLibraryExpiresAt: string | null;
+  avatarHistoryCount: number;
 }
+
+export interface AvatarEntry { id:string; name:string; size:number; url:string; createdAt:string }
+export interface AvatarLibrary { current:AvatarEntry|null; history:AvatarEntry[]; enabled:boolean; expiresAt:string|null; pendingDeletes:number; user:User }
+
+export interface PendingEmailChange {
+  requestId: string;
+  email: string;
+  expiresAt: string;
+  resendAt: string;
+  remainingAttempts: number;
+  delivered: boolean;
+}
+export interface EmailChangeStatus { enabled: boolean; pending: PendingEmailChange | null }
 
 export interface HostedImage {
   id: string;
@@ -39,6 +56,7 @@ export interface HostedImage {
 export interface Album { id: string; name: string; count: number; createdAt: string }
 
 export interface StorageConfig {
+  publicBaseUrl?: string;
   endpoint?: string;
   region?: string;
   bucket?: string;
@@ -83,6 +101,18 @@ export interface SiteSettings {
   defaultQuotaBytes: number;
   maxUploadBytes: number;
   announcement: string;
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  status: 'draft' | 'published';
+  popup: boolean;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt: string | null;
 }
 
 export interface SiteInfo {

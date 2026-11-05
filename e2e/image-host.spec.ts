@@ -1,6 +1,7 @@
-import { test as base, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { test as base, completeAuthentication, withPostLoginAnnouncement } from './helpers';
 
 const test = base.extend<{ checkBrowser: void }>({
   checkBrowser: [async ({ page }, use) => {
@@ -18,8 +19,72 @@ const test = base.extend<{ checkBrowser: void }>({
 const ORIGIN = 'http://127.0.0.1:4173';
 const PASSWORD = 'browser-test-password-2026';
 
+test('account email changes verify the new mailbox, survive reload and invalidate the old login and API token', async ({ page, request, browser }, info) => {
+  test.setTimeout(75_000);
+  const email = 'email-change-' + info.project.name + '@example.test';
+  const nextEmail = 'changed-' + info.project.name + '-' + Date.now() + '@example.test';
+  const adminLogin = await request.post('/api/auth/login', { headers: { Origin: ORIGIN }, data: { email: 'admin@example.test', password: PASSWORD } });
+  expect(adminLogin.status()).toBe(200);
+  const previous = (await (await request.get('/api/admin/mail')).json()).settings;
+  const smtp = await (await request.get('http://127.0.0.1:4199/settings')).json();
+  const other = await browser.newContext();
+  try {
+    expect((await request.patch('/api/admin/mail', { headers: { Origin: ORIGIN }, data: { ...smtp, enabled: false } })).status()).toBe(200);
+    await page.goto('/login');
+    await page.getByLabel('邮箱地址', { exact: true }).fill(email);
+    await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
+    await completeAuthentication(page, '登录我的空间');
+    await page.getByRole('button', { name: '跳过引导' }).click();
+    await navigate(page, '账户设置');
+    await expect(page.getByRole('button', { name: '更换邮箱', exact: true })).toBeDisabled();
+    await expect(page.getByText('站点暂未启用邮件服务，请联系管理员后再更换邮箱。')).toBeVisible();
+    expect((await request.patch('/api/admin/mail', { headers: { Origin: ORIGIN }, data: smtp })).status()).toBe(200);
+    await withPostLoginAnnouncement(page, () => page.reload());
+    const token = (await (await page.request.post('/api/account/tokens', { headers: { Origin: ORIGIN }, data: { name: 'change-email-old-token' } })).json()).token;
+    expect((await other.request.post(ORIGIN + '/api/auth/login', { headers: { Origin: ORIGIN }, data: { email, password: PASSWORD } })).status()).toBe(200);
+    await page.getByRole('button', { name: '更换邮箱', exact: true }).click();
+    let dialog = page.getByRole('dialog', { name: '更换登录邮箱' });
+    await dialog.getByLabel('当前登录密码', { exact: true }).fill('incorrect-password');
+    await dialog.getByLabel('新邮箱地址', { exact: true }).fill(nextEmail);
+    await dialog.getByRole('button', { name: '发送验证码', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('当前密码不正确');
+    await dialog.getByLabel('当前登录密码', { exact: true }).fill(PASSWORD);
+    await dialog.getByRole('button', { name: '发送验证码', exact: true }).click();
+    await expect(dialog.getByLabel('新邮箱验证码', { exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /秒后可重新发送/ })).toBeDisabled();
+    await expect(page.getByLabel('登录邮箱', { exact: true })).toHaveValue(email);
+    const messages: string[] = await (await request.get('http://127.0.0.1:4199/messages')).json();
+    const source = messages.slice().reverse().find(message => message.includes('To: ' + nextEmail))!;
+    expect(source).toBeTruthy();
+    const code = source.replace(/=\r\n/g, '').replace(/=([\da-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))).match(/>(\d{6})<\/p>/)![1];
+    await withPostLoginAnnouncement(page, () => page.reload());
+    await page.getByRole('button', { name: '更换邮箱', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: '更换登录邮箱' });
+    await expect(dialog.getByLabel('新邮箱验证码', { exact: true })).toBeVisible();
+    await expect(dialog).toContainText(nextEmail);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await dialog.getByLabel('新邮箱验证码', { exact: true }).fill(code);
+    await dialog.getByRole('button', { name: '确认更换', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByLabel('登录邮箱', { exact: true })).toHaveValue(nextEmail);
+    await expect(page.locator('.toast')).toContainText('登录邮箱已更换');
+    expect((await other.request.get(ORIGIN + '/api/auth/me')).status()).toBe(401);
+    expect((await request.get('/api/images', { headers: { Authorization: 'Bearer ' + token } })).status()).toBe(401);
+    expect((await request.post('/api/auth/login', { headers: { Origin: ORIGIN }, data: { email, password: PASSWORD } })).status()).toBe(401);
+    await page.request.post('/api/auth/logout', { headers: { Origin: ORIGIN } });
+    await page.goto('/login');
+    await page.getByLabel('邮箱地址', { exact: true }).fill(nextEmail);
+    await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
+    await completeAuthentication(page, '登录我的空间');
+    await expect(page).toHaveURL(/\/app$/);
+  } finally {
+    await other.close();
+    expect((await request.patch('/api/admin/mail', { headers: { Origin: ORIGIN }, data: { ...previous, password: previous.hasPassword ? '' : '' } })).status()).toBe(200);
+  }
+});
+
 async function navigate(page: Page, name: string, admin = false) {
-  const navigation = page.getByRole('navigation', { name: admin ? '后台导航' : '工作台导航' });
+  const navigation = page.getByRole('navigation', { name: admin ? '后台导航' : '工作台导航', includeHidden: true });
   await expect(navigation).toBeAttached();
   const menu = page.getByRole('button', { name: '打开导航' });
   if (await menu.isVisible()) await menu.click();
@@ -73,8 +138,9 @@ test('register, create an album, upload images, filter, edit, favorite and delet
   await page.getByLabel('你的名字', { exact: true }).fill(name);
   await page.getByLabel('邮箱地址', { exact: true }).fill(info.project.name + '-' + Date.now() + '@example.test');
   await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
-  await page.getByRole('button', { name: '创建我的小岛' }).click();
+  await completeAuthentication(page, '创建我的小岛');
   await expect(page).toHaveURL(/\/app$/);
+  await page.getByRole('button', { name: '跳过引导' }).click();
   const announcement = page.getByRole('complementary', { name: '站点公告' });
   await expect(announcement).toBeVisible();
   await page.getByRole('button', { name: '关闭公告' }).click();
@@ -162,10 +228,15 @@ test('administrator approves free expansion, adjusts quota, checks storage and p
   await page.goto('/login');
   await page.getByLabel('邮箱地址', { exact: true }).fill('admin@example.test');
   await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
-  await page.getByRole('button', { name: '登录我的空间' }).click();
+  await completeAuthentication(page, '登录我的空间');
   await expect(page).toHaveURL(/\/app$/);
+  await page.getByRole('button', { name: '跳过引导' }).click();
   await navigate(page, '管理后台');
   await expect(page.getByRole('heading', { name: '站点概览' })).toBeVisible();
+  await page.getByRole('button',{name:/^查看 .* 上传数据$/}).first().click();
+  await expect(page.locator('.trend-detail')).toContainText('张图片');
+  await page.getByRole('button',{name:'上传量',exact:true}).click();
+  await expect(page.getByRole('button',{name:'上传量',exact:true})).toHaveAttribute('aria-pressed','true');
   await navigate(page, '扩容申请', true);
   const card = page.locator('.admin-request-card').filter({ hasText: name });
   await card.getByRole('button', { name: '通过', exact: true }).click();
@@ -190,21 +261,104 @@ test('administrator approves free expansion, adjusts quota, checks storage and p
   await noHorizontalOverflow(page);
   await screenshot(page, info.project.name + '-admin-storage');
   await navigate(page, '站点设置', true);
+  await expect(page.getByLabel('公告标题', { exact: true })).toHaveCount(0);
+  await navigate(page, '公告管理', true);
   const announcement = '欢迎来到映屿，免费扩容由管理员按需分配。';
-  await page.getByLabel('站点公告').fill(announcement);
-  await page.getByRole('button', { name: '保存站点设置' }).click();
-  await expect(page.locator('.toast').filter({ hasText: '站点设置已保存' })).toBeVisible();
+  await page.getByLabel('横条内容', { exact: true }).fill(announcement);
+  await page.getByRole('button', { name: '保存横条公告' }).click();
+  await expect(page.locator('.toast').filter({ hasText: '横条公告已保存' })).toBeVisible();
+  const previousTotal = (await (await page.request.get('/api/admin/announcements')).json()).total;
+  await page.getByRole('button', { name: '新建公告' }).click();
+  const editor = page.getByRole('dialog', { name: '新建公告' });
+  await editor.getByLabel('公告标题', { exact: true }).fill('欢迎访问映屿');
+  await editor.getByLabel('公告正文', { exact: true }).fill('欢迎来到映屿。\n\n空间不足时，可以申请免费扩容。');
+  await editor.getByRole('button', { name: '预览', exact: true }).click();
+  const preview = page.getByRole('dialog', { name: '欢迎访问映屿' });
+  await expect(preview).toContainText('可以申请免费扩容');
+  await preview.getByRole('button', { name: '我知道了' }).click();
+  expect((await (await page.request.get('/api/admin/announcements')).json()).total).toBe(previousTotal);
+  await editor.getByRole('button', { name: '发布公告' }).click();
+  await expect(page.locator('.toast').filter({ hasText: '公告已发布' })).toBeVisible();
+  await withPostLoginAnnouncement(page, () => page.reload());
+  await expect(page.getByRole('heading', { name: '欢迎访问映屿', exact: true }).first()).toBeVisible();
   await navigate(page, '站点概览', true);
   await screenshot(page, info.project.name + '-admin-overview');
   await navigate(page, '返回我的空间', true);
   await expect(page.getByRole('complementary', { name: '站点公告' })).toContainText(announcement);
 });
 
+test('custom avatars remain free while reusable history consumes quota and survives library disable',async({page,request},info)=>{
+  const email='avatar-'+info.project.name+'-'+Date.now()+'@example.test';
+  await page.goto('/register');
+  await page.getByLabel('你的名字',{exact:true}).fill('头像用户');
+  await page.getByLabel('邮箱地址',{exact:true}).fill(email);
+  await page.getByLabel('密码',{exact:true}).fill(PASSWORD);
+  await completeAuthentication(page, '创建我的小岛');
+  await page.getByRole('button', { name: '跳过引导' }).click();
+  await navigate(page,'账户设置');
+  await page.getByLabel('选择头像图片').setInputFiles(resolve('public/samples/forest.jpg'));
+  await expect(page.locator('.avatar-current img')).toBeVisible();
+  await page.getByRole('switch',{name:'开启头像库'}).click();
+  await expect(page.getByRole('switch',{name:'开启头像库'})).toHaveAttribute('aria-checked','true');
+  await page.getByLabel('选择头像图片').setInputFiles(resolve('public/samples/lake.jpg'));
+  await expect(page.locator('.avatar-library-item')).toHaveCount(1);
+  await page.getByRole('button',{name:'使用头像 forest.jpg'}).click();
+  await expect(page.getByRole('button',{name:'使用头像 lake.jpg'})).toBeVisible();
+  await page.getByRole('switch',{name:'开启头像库'}).click();
+  await expect(page.locator('#avatar-settings .inline-notice').filter({hasText:'历史头像保留至'})).toBeVisible();
+  await noHorizontalOverflow(page);
+  await page.reload();
+  await expect(page.locator('.avatar-library-item')).toHaveCount(1);
+  await expect(page.getByRole('switch',{name:'开启头像库'})).toHaveAttribute('aria-checked','false');
+  // Simulate the reminder window without advancing the server's clock.
+  await page.route('**/api/auth/me',async route=>{
+    const response=await route.fetch();const body=await response.json();
+    await route.fulfill({response,json:{...body,user:{...body.user,avatarLibraryExpiresAt:new Date(Date.now()+2*86400_000).toISOString()}}});
+  });
+  await page.goto('/app');
+  await expect(page.getByRole('complementary',{name:'头像库到期提醒'})).toContainText('2 天内删除');
+  await page.getByRole('link',{name:'管理头像库'}).click();
+  await expect(page).toHaveURL(/\/app\/settings#avatar-settings$/);
+  await page.getByRole('button',{name:'删除历史头像 lake.jpg'}).click();
+  await page.getByRole('button',{name:'确认删除',exact:true}).click();
+  await expect(page.locator('.avatar-library-item')).toHaveCount(0);
+});
+
+test('registration email delivers a code that signs the user in without an email resend loop',async({page,request},info)=>{
+  const adminLogin=await request.post('/api/auth/login',{headers:{Origin:ORIGIN},data:{email:'admin@example.test',password:PASSWORD}});
+  expect(adminLogin.status()).toBe(200);
+  const smtp=await(await request.get('http://127.0.0.1:4199/settings')).json();
+  expect((await request.patch('/api/admin/mail',{headers:{Origin:ORIGIN},data:smtp})).status()).toBe(200);
+  try {
+    const email='verify-'+info.project.name+'-'+Date.now()+'@example.test';
+    await page.goto('/register');
+    await page.getByLabel('你的名字',{exact:true}).fill('验证码用户');
+    await page.getByLabel('邮箱地址',{exact:true}).fill(email);
+    await page.getByLabel('密码',{exact:true}).fill(PASSWORD);
+    await page.getByRole('button',{name:'创建我的小岛'}).click();
+    await expect(page).toHaveURL(/\/verify-email\?email=/);
+    await expect(page.getByLabel('6 位验证码')).toBeVisible();
+    await expect(page.getByLabel('邮箱地址',{exact:true})).toHaveCount(0);
+    await expect(page.getByRole('button',{name:/秒后可重新发送/})).toBeDisabled();
+    const messages:string[]=await(await request.get('http://127.0.0.1:4199/messages')).json();
+    const raw=messages.slice().reverse().find(message=>message.includes(email))!;
+    const decoded=raw.replace(/=\r\n/g,'').replace(/=([\da-f]{2})/gi,(_,hex)=>String.fromCharCode(parseInt(hex,16)));
+    const code=decoded.match(/>(\d{6})<\/p>/)?.[1];
+    expect(code).toBeTruthy();
+    await page.getByLabel('6 位验证码').fill(code!);
+    await completeAuthentication(page, '验证并进入工作台');
+    await expect(page).toHaveURL(/\/app$/);
+    await page.getByRole('button', { name: '跳过引导' }).click();
+    await expect(page.getByRole('heading',{name:'我的图片',exact:true})).toBeVisible();
+  } finally {await request.patch('/api/admin/mail',{headers:{Origin:ORIGIN},data:{...smtp,enabled:false}});}
+});
+
 test('mail configuration retains masked credentials and invalid email links show actionable errors', async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('邮箱地址', { exact: true }).fill('admin@example.test');
   await page.getByLabel('密码', { exact: true }).fill(PASSWORD);
-  await page.getByRole('button', { name: '登录我的空间' }).click();
+  await completeAuthentication(page, '登录我的空间');
+  await page.getByRole('button', { name: '跳过引导' }).click();
   await navigate(page, '管理后台');
   await navigate(page, '邮件设置', true);
   await page.getByLabel('SMTP 主机', { exact: true }).fill('smtp.example.test');

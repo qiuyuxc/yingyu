@@ -24,7 +24,10 @@ export function AuthPage({ register = false }: { register?: boolean }) {
     event.preventDefault(); setError(''); setBusy(true);
     try {
       const result = await api<{ user?: User; verificationRequired?: boolean; email?: string; delivered?: boolean }>('/api/auth/' + (register ? 'register' : 'login'), { method: 'POST', body: { email, password, ...(register ? { name } : {}) } });
-      if (result.verificationRequired) navigate('/verify-email?' + new URLSearchParams({ email: result.email || email, delivered: String(result.delivered) }));
+      if (result.verificationRequired) {
+        if(result.delivered)try{sessionStorage.setItem('verification-sent:'+(result.email||email),String(Date.now()));}catch{}
+        navigate('/verify-email?' + new URLSearchParams({ email: result.email || email, delivered: String(result.delivered) }));
+      }
       else if (result.user) setUser(result.user);
     }
     catch (err) {

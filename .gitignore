@@ -8,4 +8,6 @@ data/
 test-results/
 playwright-report/
 artifacts/
+backups/
+releases/
 *.log

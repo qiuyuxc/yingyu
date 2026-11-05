@@ -1,41 +1,14 @@
 import assert from 'node:assert/strict';
-import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { test, type TestContext } from 'node:test';
-import { GiB, type MailSettings } from '../shared/types.js';
+import { GiB } from '../shared/types.js';
 import { createMailService, renderMail } from '../server/mail.js';
 import { verifyPassword } from '../server/security.js';
 import type { Row } from '../server/db.js';
 import { fixture, TEST_PASSWORD } from './helpers.js';
+import { startTestSmtp } from './smtp-fixture.js';
 
-async function smtp(t: TestContext) {
-  const messages: string[] = [];
-  const sockets = new Set<Socket>();
-  const control = { fail: false };
-  const server = createServer(socket => {
-    sockets.add(socket); socket.on('close', () => sockets.delete(socket));
-    socket.write('220 localhost test SMTP\r\n');
-    let buffer = '', data = false, body = '';
-    socket.on('data', chunk => {
-      buffer += chunk.toString();
-      while (buffer.includes('\r\n')) {
-        const at = buffer.indexOf('\r\n'), line = buffer.slice(0, at); buffer = buffer.slice(at + 2);
-        if (data) {
-          if (line === '.') { messages.push(body); body = ''; data = false; socket.write('250 message accepted\r\n'); }
-          else body += line.replace(/^\.\./, '.') + '\r\n';
-        } else if (/^(EHLO|HELO)/.test(line)) socket.write('250-localhost\r\n250 AUTH PLAIN\r\n');
-        else if (line.startsWith('AUTH')) socket.write('235 authenticated\r\n');
-        else if (line.startsWith('MAIL FROM') && control.fail) socket.write('550 sender rejected\r\n');
-        else if (line === 'DATA') { data = true; socket.write('354 send message\r\n'); }
-        else if (line === 'QUIT') socket.end('221 bye\r\n');
-        else socket.write('250 ok\r\n');
-      }
-    });
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  const settings: MailSettings = { enabled: true, host: '127.0.0.1', port: (server.address() as AddressInfo).port, encryption: 'none', username: 'tester', password: 'smtp-secret-for-test', fromEmail: 'sender@example.test', fromName: 'Test site', passwordReset: true, verification: true, quotaNotifications: true, reviewInbox: 'reviewer@example.test' };
-  return { settings, messages, control };
-}
+async function smtp(t:TestContext){const server=await startTestSmtp();t.after(server.close);return server;}
+
 const decoded = (source: string) => source.replace(/=\r\n/g, '').replace(/=([\da-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 const tokenIn = (message: string) => { const token = decoded(message).match(/#token=([\w-]{40,})/)?.[1]; assert.ok(token); return token; };
 
@@ -54,27 +27,36 @@ test('SMTP configuration is encrypted, admin-only, and sends HTML plus text over
   const logs = await (await f.request('/api/admin/mail', { headers: { Cookie: admin.cookie } })).json(); assert.equal(logs.logs[0].status, 'sent');
 });
 
-test('registration requires verification, links expire and cannot be reused, and resend invalidates old links', async t => {
+test('registration uses a six-digit code, authenticates once, limits attempts, and supports resend', async t => {
   const f = await fixture(t), server = await smtp(t); await f.user({ role: 'admin' });
   createMailService(f.db, f.config).save(server.settings);
   const input = { name: '<script>unsafe</script>', email: 'new@example.test', password: TEST_PASSWORD };
   const registration = await f.json('/api/auth/register', 'POST', input);
   assert.equal(registration.status, 201); assert.equal(registration.headers.get('set-cookie'), null);
   assert.equal((await registration.json()).verificationRequired, true);
-  const first = tokenIn(server.messages[0]); assert.ok(!JSON.stringify(f.db.prepare('SELECT * FROM email_tokens').all()).includes(first));
+  const codeIn = (message: string) => { const code = decoded(message).match(/>(\d{6})<\/p>/)?.[1]; assert.ok(code); return code; };
+  const first = codeIn(server.messages[0]);
+  const stored = f.db.prepare('SELECT * FROM email_tokens').get() as Row;
+  assert.notEqual(stored.code_hash, first); assert.ok(stored.code_hash.length > 6);
   assert.equal((await f.json('/api/auth/login', 'POST', input)).status, 403);
   const pending = f.db.prepare('SELECT * FROM users WHERE email=?').get(input.email) as Row;
   assert.equal((await f.request('/api/images', { headers: { Cookie: f.session(pending) } })).status, 403);
   await f.json('/api/auth/resend-verification', 'POST', { email: input.email });
-  const next = tokenIn(server.messages[1]); assert.notEqual(next, first);
-  assert.equal((await f.json('/api/auth/verify-email', 'POST', { token: first })).status, 400);
-  f.db.prepare("UPDATE email_tokens SET expires_at='2000-01-01T00:00:00.000Z'").run();
-  assert.equal((await f.json('/api/auth/verify-email', 'POST', { token: next })).status, 400);
+  assert.equal(server.messages.length, 1, 'resend cooldown does not send a duplicate email');
+  f.db.prepare("UPDATE email_tokens SET sent_at='2000-01-01T00:00:00Z'").run();
   await f.json('/api/auth/resend-verification', 'POST', { email: input.email });
-  const valid = tokenIn(server.messages[2]);
-  assert.equal((await f.json('/api/auth/verify-email', 'POST', { token: valid })).status, 200);
-  assert.equal((await f.json('/api/auth/verify-email', 'POST', { token: valid })).status, 400);
-  assert.equal((await f.json('/api/auth/login', 'POST', input)).status, 200);
+  const next = codeIn(server.messages[1]); assert.notEqual(next, first);
+  assert.equal((await f.json('/api/auth/verify-email', 'POST', { email:input.email,code:first })).status, 400);
+  const wrong=next==='000000'?'111111':'000000';
+  for(let i=0;i<4;i++)assert.equal((await f.json('/api/auth/verify-email','POST',{email:input.email,code:wrong})).status,400);
+  assert.equal((await f.json('/api/auth/verify-email','POST',{email:input.email,code:next})).status,400);
+  f.db.prepare("UPDATE email_tokens SET sent_at='2000-01-01T00:00:00Z'").run();
+  await f.json('/api/auth/resend-verification','POST',{email:input.email});
+  const valid=codeIn(server.messages[2]);
+  const verified=await f.json('/api/auth/verify-email','POST',{email:input.email,code:valid});
+  assert.equal(verified.status,200);assert.ok(verified.headers.get('set-cookie'));
+  assert.equal((await verified.json()).user.email,input.email);
+  assert.equal((await f.json('/api/auth/verify-email','POST',{email:input.email,code:valid})).status,400);
 });
 
 test('password reset hides account existence and atomically revokes sessions, API tokens and reset links', async t => {

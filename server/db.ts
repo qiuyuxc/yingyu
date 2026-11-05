@@ -89,6 +89,13 @@ export function openDatabase(dataDir: string) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS one_pending_request ON quota_requests(user_id) WHERE status = 'pending';
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS announcements (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('draft','published')),
+      popup INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS announcements_published ON announcements(status,published_at);
     CREATE TABLE IF NOT EXISTS audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       actor_id TEXT REFERENCES users(id),
@@ -106,10 +113,32 @@ export function openDatabase(dataDir: string) {
       expires_at TEXT NOT NULL,
       UNIQUE(user_id,purpose)
     );
+    CREATE TABLE IF NOT EXISTS email_change_requests (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL UNIQUE,
+      source_email TEXT NOT NULL,
+      password_fingerprint TEXT NOT NULL,
+      email TEXT NOT NULL COLLATE NOCASE,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      delivered INTEGER NOT NULL DEFAULT 0,
+      sent_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS mail_logs (
       id TEXT PRIMARY KEY, recipient TEXT NOT NULL, kind TEXT NOT NULL,
       status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS avatars (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+      storage_id TEXT NOT NULL REFERENCES storage_providers(id), object_key TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL, size INTEGER NOT NULL, mime TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('staging','current','history','garbage')),
+      charged_bytes INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS one_current_avatar ON avatars(user_id) WHERE state='current';
+    CREATE INDEX IF NOT EXISTS avatars_owner ON avatars(user_id,state);
   `);
   const imageColumns = db.prepare('PRAGMA table_info(images)').all() as Row[];
   if (!imageColumns.some(column => column.name === 'state_changed_at')) {
@@ -122,7 +151,10 @@ export function openDatabase(dataDir: string) {
     // Existing accounts and the bootstrap administrator keep working after upgrade.
     db.prepare('UPDATE users SET email_verified_at=created_at').run();
   }
-  db.exec('PRAGMA user_version = 3');
+  const additions: Record<string,string> = { avatar_library_enabled:'INTEGER NOT NULL DEFAULT 0',avatar_expires_at:'TEXT',avatar_lock_token:'TEXT',avatar_lock_until:'INTEGER NOT NULL DEFAULT 0' };
+  for (const [name,type] of Object.entries(additions)) if (!userColumns.some(column=>column.name===name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+  const tokenColumns=db.prepare('PRAGMA table_info(email_tokens)').all() as Row[];
+  for (const [name,type] of Object.entries({code_hash:'TEXT',attempts:'INTEGER NOT NULL DEFAULT 0',sent_at:'TEXT'})) if (!tokenColumns.some(column=>column.name===name)) db.exec(`ALTER TABLE email_tokens ADD COLUMN ${name} ${type}`);
   const defaults: SiteSettings = {
     siteName: '映屿',
     tagline: '为每一张图片，留一个轻盈的住处。',
@@ -133,6 +165,17 @@ export function openDatabase(dataDir: string) {
   };
   const insert = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
   for (const [key, value] of Object.entries(defaults)) insert.run(key, JSON.stringify(value));
+  // Move the former single announcement into the center once, preserving edits.
+  transaction(db, () => {
+    const legacy = Object.fromEntries((db.prepare("SELECT key,value FROM settings WHERE key IN ('loginAnnouncementEnabled','loginAnnouncementTitle','loginAnnouncementContent')").all() as Row[]).map(row => [row.key, JSON.parse(row.value)]));
+    if (typeof legacy.loginAnnouncementContent === 'string' && legacy.loginAnnouncementContent.trim()) {
+      const time = now();
+      db.prepare('INSERT OR IGNORE INTO announcements(id,title,content,status,popup,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?)')
+        .run('legacy-announcement', legacy.loginAnnouncementTitle?.trim() || '站点公告', legacy.loginAnnouncementContent, legacy.loginAnnouncementEnabled ? 'published' : 'draft', legacy.loginAnnouncementEnabled ? 1 : 0, time, time, legacy.loginAnnouncementEnabled ? time : null);
+    }
+    db.prepare("DELETE FROM settings WHERE key IN ('loginAnnouncementEnabled','loginAnnouncementTitle','loginAnnouncementContent')").run();
+    db.exec('PRAGMA user_version = 6');
+  });
   db.prepare("INSERT OR IGNORE INTO storage_providers(id,name,kind,config,active,created_at) VALUES('local','本地存储','local','{}',1,?)").run(now());
   return db;
 }
@@ -157,10 +200,13 @@ export function getSettings(db: DB): SiteSettings {
 
 export function userView(db: DB, row: Row): User {
   const count = db.prepare("SELECT COUNT(*) AS count FROM images WHERE user_id=? AND state='ready'").get(row.id) as Row;
+  const avatar=db.prepare("SELECT id FROM avatars WHERE user_id=? AND state='current'").get(row.id) as Row|undefined;
+  const history=db.prepare("SELECT COUNT(*) AS count FROM avatars WHERE user_id=? AND state='history'").get(row.id) as Row;
   return {
     id: row.id, email: row.email, name: row.name, role: row.role, status: row.status,
     quotaBytes: row.quota_bytes, usedBytes: row.used_bytes, reservedBytes: row.reserved_bytes,
     tier: row.tier, imageCount: count.count, createdAt: row.created_at,
+    avatarUrl:avatar?'/a/'+avatar.id:null,avatarLibraryEnabled:Boolean(row.avatar_library_enabled),avatarLibraryExpiresAt:row.avatar_expires_at||null,avatarHistoryCount:history.count,
   };
 }
 

@@ -1,0 +1,56 @@
+.avatar { overflow: hidden; }
+.avatar > img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-settings-panel { grid-column: 1 / -1; }
+.avatar-current { display:flex; align-items:center; gap:18px; margin:8px 0 25px; }
+.avatar-current > div { min-width:0; }
+.avatar-current strong { font-size:12px; }
+.avatar-current p { color:var(--muted); font-size:10px; margin:5px 0 12px; }
+.avatar-current > div > div { display:flex; flex-wrap:wrap; gap:8px; }
+.avatar-library-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:20px 0 15px; }
+.avatar-library-heading > span { color:var(--muted); font-size:10px; }
+.avatar-library-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(105px,1fr)); gap:13px; }
+.avatar-library-item { min-width:0; background:var(--input); border:1px solid var(--line); border-radius:12px; padding:10px; }
+.avatar-library-item > img { width:62px; height:62px; object-fit:cover; border-radius:18px; margin:0 auto 10px; }
+.avatar-library-item > span { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:10px; }
+.avatar-library-item > small { display:block; color:var(--muted); margin:4px 0 8px; }
+.avatar-library-item > div { display:flex; justify-content:space-between; gap:4px; }
+.avatar-library-item .button { font-size:9px; padding:5px 8px; min-height:28px; }
+.avatar-expiry-notice a { display:inline-block; margin-left:10px; text-decoration:underline; }
+.verification-address { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.verification-address > span { color:var(--muted); }
+.verification-address > strong { overflow-wrap:anywhere; }
+.verification-address > button { border:0; background:none; padding:3px; color:var(--accent); text-decoration:underline; font-size:10px; }
+.verification-code { font-size:24px; letter-spacing:8px; text-align:center; font-variant-numeric:tabular-nums; min-height:54px; }
+.upload-trend { width:100%; }
+.trend-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+.trend-toolbar > span { color:var(--muted); font-size:9px; }
+.trend-toolbar .segmented button { padding:4px 9px; font-size:10px; min-height:25px; }
+.trend-svg { display:block; width:100%; height:180px; overflow:visible; }
+.trend-svg [role=button] { cursor:pointer; outline:none; }
+.trend-svg [role=button]:focus-visible > circle:last-child { stroke:var(--text); stroke-width:3; }
+.trend-dates { display:flex; justify-content:space-between; margin:0 5% 0 7%; }
+.trend-dates button { border:0; background:none; border-radius:6px; color:var(--muted); padding:5px; font-size:9px; }
+.trend-dates button.selected { background:var(--accent-soft); color:var(--accent-strong); }
+.trend-detail { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:15px; border-top:1px solid var(--line); padding-top:13px; font-size:10px; color:var(--muted); }
+.trend-detail strong { color:var(--text); }
+@media(max-width:640px) { .avatar-current { align-items:flex-start; gap:13px; }.avatar-current .avatar-large { width:53px; height:53px; }.trend-svg { height:160px; }.trend-dates button { padding:5px 3px; font-size:8px; } }
+.account-email-settings { margin-top:22px; padding-top:20px; border-top:1px solid var(--line); }
+.account-email-row { display:flex; align-items:flex-end; gap:10px; }
+.account-email-row>div { flex:1; min-width:0; }
+.account-email-row label { display:block; margin-bottom:7px; }
+.account-email-row>.button { flex-shrink:0; margin-bottom:1px; }
+.email-change-note { color:var(--muted); font-size:10px; line-height:1.8; overflow-wrap:anywhere; }
+.account-email-settings>.email-change-note { margin-top:10px; }
+.account-email-settings .auth-error { color:var(--danger); font-size:10px; overflow-wrap:anywhere; }
+.account-email-settings>.auth-error { margin-top:10px; }
+.account-email-settings .text-button { border:0; background:none; padding:3px 8px; color:var(--accent); }
+.email-change-steps { display:flex; list-style:none; padding:0; margin:0 0 23px; gap:17px; color:var(--muted); }
+.email-change-steps li { display:flex; align-items:center; gap:6px; font-size:10px; }
+.email-change-steps li span { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--input); }
+.email-change-steps li.active { color:var(--accent); }
+.email-change-steps li.active span { background:var(--accent-soft); }
+.email-change-recipient { padding:13px; border:1px solid var(--line); border-radius:12px; min-width:0; }
+.email-change-recipient span { display:block; color:var(--muted); font-size:10px; margin-bottom:5px; }
+.email-change-recipient strong { overflow-wrap:anywhere; }
+.email-change-actions { flex-wrap:wrap; }
+@media(max-width:420px) { .account-email-row { flex-wrap:wrap; } .account-email-row>div { flex-basis:100%; } .email-change-steps { gap:10px; } }

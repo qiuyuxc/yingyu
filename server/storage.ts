@@ -14,7 +14,20 @@ function safeKey(key: string) {
   if (!/^[a-zA-Z0-9/_\-.]+$/.test(key) || key.split('/').includes('..') || key.startsWith('/')) throw new Error('无效的对象路径');
 }
 
+export function publicObjectUrl(base:string,key:string) {
+  safeKey(key);
+  const url=new URL(base);
+  if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash) throw new HTTPException(400,{message:'加速域名需使用 HTTPS，不支持凭据、查询参数或片段'});
+  url.pathname=url.pathname.replace(/\/?$/,'/')+key.split('/').map(encodeURIComponent).join('/');
+  return url.href;
+}
+
 export function validateStorage(kind: StorageKind, config: StorageConfig) {
+  if(config.publicBaseUrl) {
+    if(kind!=='r2'&&kind!=='s3') throw new HTTPException(400,{message:'该存储类型不支持加速域名'});
+    try { publicObjectUrl(config.publicBaseUrl,'connection-check'); }
+    catch { throw new HTTPException(400,{message:'请输入有效的 HTTPS 加速域名，可包含路径前缀'}); }
+  }
   if (kind === 'local') return;
   let url: URL;
   try { url = new URL(config.endpoint || ''); }

@@ -1,0 +1,51 @@
+services:
+  yingyu:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8787"
+      DATA_DIR: /app/data
+      TRUST_PROXY: "1"
+    ports:
+      - "127.0.0.1:${YINGYU_PORT:-8787}:8787"
+    volumes:
+      - yingyu-data:/app/data
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  caddy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on:
+      yingyu:
+        condition: service_healthy
+    environment:
+      YINGYU_DOMAIN: ${YINGYU_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  yingyu-data:
+  caddy-data:
+  caddy-config:

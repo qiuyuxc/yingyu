@@ -18,7 +18,6 @@ const name=await rl.question('管理员名称：');
 rl.close();
 
 async function password(prompt:string):Promise<string> {
-  stdout.write(prompt);
   stdin.setRawMode(true);stdin.resume();stdin.setEncoding('utf8');
   return new Promise((resolve,reject)=>{
     let value='';
@@ -32,6 +31,7 @@ async function password(prompt:string):Promise<string> {
       }
     };
     stdin.on('data',handler);
+    stdout.write(prompt);
   });
 }
 try {

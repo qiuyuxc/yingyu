@@ -1,0 +1,4 @@
+{$YINGYU_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy yingyu:8787
+}

@@ -10,6 +10,7 @@ export interface AppConfig {
   encryptionKey: Buffer;
   production: boolean;
   integrationToken: string;
+  trustProxy?: boolean;
 }
 
 export function loadConfig(): AppConfig {
@@ -37,5 +38,6 @@ export function loadConfig(): AppConfig {
     encryptionKey: Buffer.from(key, 'hex'),
     production,
     integrationToken: process.env.QUOTA_INTEGRATION_TOKEN || '',
+    trustProxy: process.env.TRUST_PROXY === '1',
   };
 }

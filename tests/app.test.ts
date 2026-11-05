@@ -4,6 +4,46 @@ import { GiB } from '../shared/types.js';
 import { fixture, PNG, ORIGIN, TEST_PASSWORD, staleTime, webdav } from './helpers.js';
 import type { Row } from '../server/db.js';
 
+test('announcement publishing is admin-only, hides drafts, revisions invalidate dismissals, and banners stay independent', async t => {
+  const f = await fixture(t);
+  const admin = await f.user({ role: 'admin' });
+  const user = await f.user();
+  const get = async (path: string) => (await f.request(path, { headers: { Cookie: user.cookie } })).json();
+  const draft = { title: '站点更新', content: '第一段\n\n第二段 <script>literal text</script>', status: 'draft', popup: true };
+  assert.equal((await f.request('/api/announcements')).status, 401);
+  assert.equal((await f.request('/api/announcements/popup')).status, 401);
+  assert.equal((await f.json('/api/admin/announcements', 'POST', draft, user.cookie)).status, 403);
+  const created = await f.json('/api/admin/announcements', 'POST', draft, admin.cookie);
+  assert.equal(created.status, 201);
+  let post = (await created.json()).announcement;
+  assert.equal((await get('/api/announcements')).total, 0);
+  assert.equal((await get('/api/announcements/popup')).announcement, null);
+  assert.equal(JSON.stringify(await (await f.request('/api/site')).json()).includes(draft.content), false);
+  const edit = (body: unknown) => f.json('/api/admin/announcements/' + post.id, 'PATCH', body, admin.cookie);
+  post = (await (await edit({ ...post, status: 'published' })).json()).announcement;
+  assert.equal((await get('/api/announcements')).total, 1);
+  assert.equal((await get('/api/announcements/popup')).announcement.content, draft.content);
+  const revision = post.revision;
+  assert.equal((await (await edit(post)).json()).announcement.revision, revision);
+  post = (await (await edit({ ...post, content: '公告已更新' })).json()).announcement;
+  assert.equal(post.revision, revision + 1);
+  assert.equal((await edit({ ...post, revision })).status, 409);
+  assert.equal((await edit({ ...post, content: 'x'.repeat(10001) })).status, 400);
+  assert.equal((await edit({ ...post, title: 'x'.repeat(81) })).status, 400);
+  post = (await (await edit({ ...post, popup: false })).json()).announcement;
+  assert.equal((await get('/api/announcements/popup')).announcement, null);
+  assert.equal((await get('/api/announcements')).total, 1);
+  post = (await (await edit({ ...post, status: 'draft' })).json()).announcement;
+  assert.equal((await get('/api/announcements')).total, 0);
+  assert.equal((await f.json('/api/admin/announcement-banner', 'PATCH', { announcement: '新的横条' }, admin.cookie)).status, 200);
+  const { announcement, ...settings } = (await (await f.request('/api/site')).json()).settings;
+  assert.equal((await f.json('/api/admin/settings', 'PATCH', settings, admin.cookie)).status, 200);
+  assert.equal((await (await f.request('/api/site')).json()).settings.announcement, '新的横条');
+  assert.equal((await f.json('/api/admin/announcements/' + post.id, 'DELETE', {}, user.cookie)).status, 403);
+  assert.equal((await f.json('/api/admin/announcements/' + post.id, 'DELETE', {}, admin.cookie)).status, 200);
+  assert.equal((await edit(post)).status, 404);
+});
+
 test('registration requires initialization and receives the administrator-defined free quota', async t => {
   const f = await fixture(t);
   const input = { name: '新用户', email: 'new@example.test', password: TEST_PASSWORD };

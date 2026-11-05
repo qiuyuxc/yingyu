@@ -5,7 +5,7 @@ import { api, errorMessage, formatDate, useResource } from '../api';
 import { useAuth, useToast } from '../context';
 import { Button, ErrorState, Loading, PageHeading, Switch } from '../components/ui';
 
-const kinds: Record<string, string> = { test: '测试邮件', verify: '注册验证', reset: '找回密码', 'quota-request': '扩容申请回执', 'quota-review-needed': '待审核通知', 'quota-reviewed': '审核结果', 'quota-updated': '配额调整' };
+const kinds: Record<string, string> = { test: '测试邮件', verify: '注册验证', reset: '找回密码', 'email-change': '更换邮箱验证', 'email-changed': '邮箱变更通知', 'quota-request': '扩容申请回执', 'quota-review-needed': '待审核通知', 'quota-reviewed': '审核结果', 'quota-updated': '配额调整' };
 
 export function AdminMailPage() {
   const { user, refreshSite } = useAuth();
