@@ -4,6 +4,12 @@ export type Role = 'user' | 'admin';
 export type StorageKind = 'local' | 's3' | 'r2' | 'webdav';
 export type ImageVisibility = 'public' | 'private';
 
+export interface MobileSession {
+  accessToken: string;
+  tokenType: 'Bearer';
+  expiresAt: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -53,7 +59,7 @@ export interface HostedImage {
   ownerId?: string;
 }
 
-export interface Album { id: string; name: string; count: number; createdAt: string }
+export interface Album { id: string; name: string; count: number; createdAt: string; coverUrl?: string | null }
 
 export interface StorageConfig {
   publicBaseUrl?: string;

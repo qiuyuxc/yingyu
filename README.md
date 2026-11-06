@@ -1,12 +1,14 @@
 # 映屿 · 免费多用户图床
 
-React 实现的 MIUIX 风格紧凑界面，配合通透玻璃面板。提供系统黑白、森林绿、雾蓝三种配色，以及浅色、灰黑色深色和跟随系统模式，配色与明暗模式可独立设置并保存在浏览器。基础字号为 **11px**，支持桌面和手机。
+React 实现的 MIUIX 风格紧凑界面，配合通透玻璃面板。默认使用系统黑白配色，并提供森林绿和雾蓝；浅色、灰黑色深色和跟随系统模式可独立设置并保存在浏览器。黑白配色使用中性灰阶，基础字号为 **11px**，支持桌面和手机。
 
 首页示例相册自动滑动淡入淡出，可手动切换或暂停，也会随页面滚动滑动淡出。悬停、键盘聚焦、页面隐藏和离开视口时暂停自动轮播；系统开启“减少动态效果”后关闭自动轮播和位移动画。卡片、弹窗、按钮及首页区块有轻量过渡。
 
 提供官网、用户工作台和管理后台。配额由管理员分配，用户免费申请扩容，没有支付流程。外部配额接口默认关闭，可以按需接入其他服务。
 
 源码：[qiuyuxc/yingyu](https://github.com/qiuyuxc/yingyu)。
+
+Android 原生客户端位于 [`android/`](android/README.md)，使用 Kotlin、Compose、Miuix 和液态玻璃底栏，支持 Android 8.0+（Android 13+ 启用折射效果）。提供用户工作台和精简的管理员图片管理、扩容审核；连接自建 HTTPS 站点。首次使用前需更新并重启本项目后端，构建与 API 说明见 Android 文档。
 
 原创代码使用 [Apache License 2.0](LICENSE)，允许商业使用、修改和分发，保留版权、许可及必要声明。第三方依赖使用各自原有许可，完整文本及版权说明见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。示例照片适用 Unsplash License，来源记录在 [public/samples/README.md](public/samples/README.md)。
 
@@ -80,6 +82,8 @@ npm run dev
 `setup` 会在终端提示输入首位管理员的邮箱、名称和密码，密码输入隐藏，至少 10 个字符。已有管理员时不会覆盖账号。
 
 访问 **http://localhost:5173**。用户注册后可上传图片，管理员登录后通过侧栏的“管理后台”管理站点。
+
+需要直接给手机 App 联调时，运行 `npm run build && npm run preview:local`，按输出的局域网地址访问。此命令创建独立的本地测试数据与测试账号，预置示例图片和待审核的扩容申请；账号文件位于 `data/local-app-preview/accounts.json`。`npm run preview:local -- status` 查看状态，`npm run preview:local -- stop` 停止服务。Android Debug 包支持本地 HTTP 地址，详细说明见 [Android 文档](android/README.md)。
 
 开发前端监听 `0.0.0.0:5173`，API 默认监听 `127.0.0.1:8787`。如果通过其他主机名或 IP 访问，把 `.env` 中的 `PUBLIC_URL` 改为浏览器使用的完整站点地址；API 会校验该来源。
 

@@ -76,6 +76,7 @@ export function openDatabase(dataDir: string) {
     );
     CREATE INDEX IF NOT EXISTS images_owner ON images(user_id,state,created_at);
     CREATE INDEX IF NOT EXISTS images_storage ON images(storage_id);
+    CREATE INDEX IF NOT EXISTS images_album ON images(album_id,state,created_at,id);
     CREATE TABLE IF NOT EXISTS quota_requests (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id),
@@ -141,6 +142,11 @@ export function openDatabase(dataDir: string) {
     CREATE INDEX IF NOT EXISTS avatars_owner ON avatars(user_id,state);
   `);
   const imageColumns = db.prepare('PRAGMA table_info(images)').all() as Row[];
+  const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as Row[];
+  if (!sessionColumns.some(column => column.name === 'kind')) {
+    db.exec("ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'web' CHECK(kind IN ('web','app'))");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS sessions_owner ON sessions(user_id)');
   if (!imageColumns.some(column => column.name === 'state_changed_at')) {
     db.exec("ALTER TABLE images ADD COLUMN state_changed_at TEXT NOT NULL DEFAULT ''");
   }
@@ -174,7 +180,7 @@ export function openDatabase(dataDir: string) {
         .run('legacy-announcement', legacy.loginAnnouncementTitle?.trim() || '站点公告', legacy.loginAnnouncementContent, legacy.loginAnnouncementEnabled ? 'published' : 'draft', legacy.loginAnnouncementEnabled ? 1 : 0, time, time, legacy.loginAnnouncementEnabled ? time : null);
     }
     db.prepare("DELETE FROM settings WHERE key IN ('loginAnnouncementEnabled','loginAnnouncementTitle','loginAnnouncementContent')").run();
-    db.exec('PRAGMA user_version = 6');
+    db.exec('PRAGMA user_version = 7');
   });
   db.prepare("INSERT OR IGNORE INTO storage_providers(id,name,kind,config,active,created_at) VALUES('local','本地存储','local','{}',1,?)").run(now());
   return db;

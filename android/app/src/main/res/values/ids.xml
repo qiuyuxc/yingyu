@@ -1,0 +1,4 @@
+<resources>
+    <item name="app_content" type="id" />
+    <item name="app_navigation" type="id" />
+</resources>

@@ -17,8 +17,9 @@ import { createMailService, mailSchema } from './mail.js';
 import { createAvatarService, AVATAR_LIMIT } from './avatars.js';
 import { publicObjectUrl } from './storage.js';
 import { createEmailChangeService } from './email-change.js';
+import { isMobileAuthRequest, mobileAdminAllowed, mobileAuthPrefix, mobileSessionDays } from './mobile.js';
 
-type Env = { Variables: { user: Row; authKind: 'session' | 'token' } };
+type Env = { Variables: { user: Row; authKind: 'session' | 'token' | 'app'; sessionHash: string } };
 const passwordSchema=z.string().min(10,'密码至少需要 10 个字符').max(128,'密码最多 128 个字符');
 const emailSchema=z.string().trim().toLowerCase().email('请输入有效的邮箱地址').max(254);
 const nameSchema=z.string().trim().min(1,'请输入名称').max(40,'名称最多 40 个字符');
@@ -72,7 +73,11 @@ export function createApp(db: DB, config: AppConfig) {
     if (!['GET','HEAD','OPTIONS'].includes(c.req.method)) {
       const origin=c.req.header('Origin');
       const machineAuth=c.req.header('Authorization')?.startsWith('Bearer ');
-      if (origin ? origin!==config.publicUrl : !machineAuth) throw new HTTPException(403, { message:'请求来源不受信任' });
+      const mobileAuth=c.req.method==='POST' && isMobileAuthRequest(c.req.path);
+      if (mobileAuth && (c.req.header('Cookie') || !/^application\/json(?:\s*;|$)/i.test(c.req.header('Content-Type')||''))) {
+        throw new HTTPException(400, { message:'App 登录接口仅接受无 Cookie 的 JSON 请求' });
+      }
+      if (origin ? origin!==config.publicUrl : !machineAuth && !mobileAuth) throw new HTTPException(403, { message:'请求来源不受信任' });
     }
     await next();
   });
@@ -84,12 +89,19 @@ export function createApp(db: DB, config: AppConfig) {
     if (bearer?.startsWith('Bearer ')) {
       const token=bearer.slice(7);
       if (token.length>150) throw new HTTPException(401, { message:'访问令牌无效' });
-      row=db.prepare('SELECT u.*,t.id AS api_token_id FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=?').get(hashToken(token)) as Row|undefined;
-      if (row) db.prepare('UPDATE api_tokens SET last_used_at=? WHERE id=?').run(now(),row.api_token_id);
-      c.set('authKind','token');
+      if (token.startsWith('yy_app_')) {
+        row=db.prepare("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.kind='app' AND s.expires_at>?").get(hashToken(token),now()) as Row|undefined;
+        c.set('authKind','app');
+        c.set('sessionHash',hashToken(token));
+      } else {
+        row=db.prepare('SELECT u.*,t.id AS api_token_id FROM api_tokens t JOIN users u ON u.id=t.user_id WHERE t.token_hash=?').get(hashToken(token)) as Row|undefined;
+        if (row) db.prepare('UPDATE api_tokens SET last_used_at=? WHERE id=?').run(now(),row.api_token_id);
+        c.set('authKind','token');
+      }
     } else if (session && session.length<150) {
-      row=db.prepare('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(hashToken(session),now()) as Row|undefined;
+      row=db.prepare("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.kind='web' AND s.expires_at>?").get(hashToken(session),now()) as Row|undefined;
       c.set('authKind','session');
+      c.set('sessionHash',hashToken(session));
     }
     if (!row) throw new HTTPException(401, { message:'请先登录' });
     if (row.status!=='active') throw new HTTPException(403, { message:'账号已被停用，请联系管理员' });
@@ -100,15 +112,20 @@ export function createApp(db: DB, config: AppConfig) {
   const admin=async(c: Context<Env>,next: () => Promise<void>) => {
     if (c.get('user').role!=='admin') throw new HTTPException(403, { message:'需要管理员权限' });
     // Personal API tokens only access user APIs, even for administrators.
-    if (c.get('authKind')!=='session') throw new HTTPException(403, { message:'管理操作请使用网页登录；自动调额使用独立集成接口' });
+    if (c.get('authKind')!=='session' && !(c.get('authKind')==='app' && mobileAdminAllowed(c.req.method,c.req.path))) throw new HTTPException(403, { message:'此管理功能仅支持网页登录' });
     await next();
   };
   const issueSession=(c:Context<Env>,userId:string) => {
-    const token=newToken();
-    const expires=new Date(Date.now()+sessionDays*86400_000);
+    const mobile=c.req.path.startsWith(mobileAuthPrefix) || c.get('authKind')==='app';
+    const token=(mobile?'yy_app_':'')+newToken();
+    const expires=new Date(Date.now()+(mobile?mobileSessionDays:sessionDays)*86400_000);
     db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now());
-    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hashToken(token),userId,expires.toISOString());
+    // Bound persistent app sessions without evicting browser sessions.
+    if (mobile) db.prepare("DELETE FROM sessions WHERE user_id=? AND kind='app' AND token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id=? AND kind='app' ORDER BY expires_at DESC LIMIT 19)").run(userId,userId);
+    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,kind) VALUES(?,?,?,?)').run(hashToken(token),userId,expires.toISOString(),mobile?'app':'web');
+    if (mobile) return { session:{ accessToken:token,tokenType:'Bearer' as const,expiresAt:expires.toISOString() } };
     setCookie(c,cookieName,token,{ httpOnly:true,secure:config.production,sameSite:'Lax',path:'/',maxAge:sessionDays*86400 });
+    return {};
   };
   const ownedImage=(id:string,user:Row) => {
     const image=db.prepare('SELECT * FROM images WHERE id=? AND user_id=?').get(id,user.id) as Row|undefined;
@@ -151,7 +168,7 @@ export function createApp(db: DB, config: AppConfig) {
   app.get('/api/health',c=>c.json({ ok:true }));
   app.get('/api/site',c=>{ const email=mail.settings(); return c.json({ settings:getSettings(db),initialized:Boolean(db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get()),storageReady:Boolean(db.prepare('SELECT id FROM storage_providers WHERE active=1').get()),email:{passwordReset:email.enabled&&email.passwordReset,verification:email.enabled&&email.verification} }); });
 
-  app.post('/api/auth/forgot-password',async c=>{
+  app.on('POST',['/api/auth/forgot-password',mobileAuthPrefix+'forgot-password'],async c=>{
     const input=await json(c,z.object({email:emailSchema}));
     limiter.hit('forgot:'+requestIp(c),10,3600_000);limiter.hit('forgot-email:'+input.email,3,15*60_000);
     const smtp=mail.settings();
@@ -160,7 +177,7 @@ export function createApp(db: DB, config: AppConfig) {
     if(user) await sendEmailToken(user,'reset');
     return c.json({message:'如果该邮箱已注册，你将收到密码重置邮件。请检查收件箱或垃圾邮件。'},202);
   });
-  app.post('/api/auth/resend-verification',async c=>{
+  app.on('POST',['/api/auth/resend-verification',mobileAuthPrefix+'resend-verification'],async c=>{
     const input=await json(c,z.object({email:emailSchema}));
     limiter.hit('resend:'+requestIp(c),10,3600_000);limiter.hit('resend-email:'+input.email,3,15*60_000);
     if(!mail.settings().enabled) throw new HTTPException(503,{message:'邮件服务暂未启用，请联系管理员'});
@@ -169,7 +186,7 @@ export function createApp(db: DB, config: AppConfig) {
     if(user&&(!previous?.sent_at||Date.now()-Date.parse(previous.sent_at)>=60000)) await sendEmailToken(user,'verify');
     return c.json({message:'如果该邮箱需要验证，验证码将发送至你的收件箱，有效期 10 分钟。',retryAfter:60},202);
   });
-  app.post('/api/auth/verify-email',async c=>{
+  app.on('POST',['/api/auth/verify-email',mobileAuthPrefix+'verify-email'],async c=>{
     limiter.hit('verify:'+requestIp(c),20,15*60_000);
     const input=await json(c,z.union([z.object({email:emailSchema,code:z.string().regex(/^\d{6}$/,'请输入 6 位验证码')}),z.object({token:z.string().min(32).max(128)})]));
     const userId=transaction(db,()=>{
@@ -185,10 +202,9 @@ export function createApp(db: DB, config: AppConfig) {
       return row.user_id as string;
     });
     if(!userId) throw new HTTPException(400,{message:'token' in input?'验证链接无效或已过期，请重新发送验证码':'验证码错误、已过期或尝试次数过多，请重新获取验证码'});
-    issueSession(c,userId);
-    return c.json({ok:true,user:userView(db,db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row)});
+    return c.json({ok:true,user:userView(db,db.prepare('SELECT * FROM users WHERE id=?').get(userId) as Row),...issueSession(c,userId)});
   });
-  app.post('/api/auth/reset-password',async c=>{
+  app.on('POST',['/api/auth/reset-password',mobileAuthPrefix+'reset-password'],async c=>{
     limiter.hit('reset:'+requestIp(c),20,15*60_000);
     const input=await json(c,z.object({token:z.string().min(32).max(128),password:passwordSchema}));
     const passwordHash=await hashPassword(input.password);
@@ -202,11 +218,11 @@ export function createApp(db: DB, config: AppConfig) {
       db.prepare('DELETE FROM email_change_requests WHERE user_id=?').run(row.user_id);
       audit(db,row.user_id,'account.password',row.user_id,'通过邮件重置密码并撤销全部会话与令牌');
     });
-    deleteCookie(c,cookieName,{path:'/',secure:config.production});
+    if (!isMobileAuthRequest(c.req.path)) deleteCookie(c,cookieName,{path:'/',secure:config.production});
     return c.json({ok:true});
   });
 
-  app.post('/api/auth/register',async c => {
+  app.on('POST',['/api/auth/register',mobileAuthPrefix+'register'],async c => {
     limiter.hit('register:'+requestIp(c),10,3600_000);
     if (!db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get()) throw new HTTPException(503, { message:'图床尚未初始化，请联系站点管理员' });
     if (!getSettings(db).registrationOpen) throw new HTTPException(403, { message:'管理员已暂停注册' });
@@ -223,29 +239,47 @@ export function createApp(db: DB, config: AppConfig) {
       const delivered=await sendEmailToken(row,'verify');
       return c.json({verificationRequired:true,email:row.email,delivered},201);
     }
-    issueSession(c,row.id);
-    return c.json({ user:userView(db,row) },201);
+    return c.json({ user:userView(db,row),...issueSession(c,row.id) },201);
   });
-  app.post('/api/auth/login',async c => {
+  app.on('POST',['/api/auth/login',mobileAuthPrefix+'login'],async c => {
     limiter.hit('login:'+requestIp(c),20,15*60_000);
     const input=await json(c,z.object({ email:emailSchema,password:z.string().min(1).max(128) }));
     limiter.hit('login-email:'+input.email,10,15*60_000);
-    const row=db.prepare('SELECT * FROM users WHERE email=?').get(input.email) as Row|undefined;
+    let row=db.prepare('SELECT * FROM users WHERE email=?').get(input.email) as Row|undefined;
     dummyPassword??=hashPassword(newToken());
     const valid=await verifyPassword(input.password,row?.password_hash || await dummyPassword);
     if (!row || !valid) throw new HTTPException(401, { message:'邮箱或密码不正确' });
+    const latest=db.prepare('SELECT * FROM users WHERE id=?').get(row.id) as Row|undefined;
+    if (!latest || latest.password_hash!==row.password_hash || latest.email!==row.email) throw new HTTPException(401, { message:'登录信息已变更，请重新登录' });
+    row=latest;
     if (row.status!=='active') throw new HTTPException(403, { message:'账号已被停用，请联系管理员' });
     if (!row.email_verified_at) return c.json({error:'请先验证邮箱',verificationRequired:true,email:row.email},403);
-    issueSession(c,row.id);
-    return c.json({ user:userView(db,row) });
+    return c.json({ user:userView(db,row),...issueSession(c,row.id) });
   });
   app.post('/api/auth/logout',authenticate,c => {
+    if (c.get('authKind')==='app') {
+      db.prepare('DELETE FROM sessions WHERE token_hash=?').run(c.get('sessionHash'));
+      return c.json({ ok:true });
+    }
     const token=getCookie(c,cookieName);
     if (token) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hashToken(token));
     deleteCookie(c,cookieName,{ path:'/',secure:config.production });
     return c.json({ ok:true });
   });
   app.get('/api/auth/me',authenticate,c=>c.json({ user:userView(db,c.get('user')) }));
+  app.post(mobileAuthPrefix+'refresh',authenticate,c=>{
+    if (c.get('authKind')!=='app') throw new HTTPException(403,{message:'需要 App 登录会话'});
+    return c.json(transaction(db,()=>{
+      db.prepare('DELETE FROM sessions WHERE token_hash=?').run(c.get('sessionHash'));
+      return { user:userView(db,c.get('user')),...issueSession(c,c.get('user').id) };
+    }));
+  });
+  app.post(mobileAuthPrefix+'logout',authenticate,c=>{
+    if (c.get('authKind')!=='app') throw new HTTPException(403,{message:'需要 App 登录会话'});
+    db.prepare('DELETE FROM sessions WHERE token_hash=?').run(c.get('sessionHash'));
+    return c.json({ok:true});
+  });
+  app.get('/api/mobile/v1/capabilities',c=>c.json({apiVersion:1,sessionDays:mobileSessionDays,admin:['overview','images','quota-requests']}));
 
   const announcementView = (row: Row) => ({ id: row.id, title: row.title, content: row.content, status: row.status, popup: Boolean(row.popup), revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at, publishedAt: row.published_at });
   const announcementList = (c: Context<Env>, includeDrafts: boolean) => {
@@ -263,8 +297,8 @@ export function createApp(db: DB, config: AppConfig) {
 
   app.use('/api/account/*',authenticate);
   const emailSessionHash = (c: Context<Env>) => {
-    if (c.get('authKind') !== 'session') throw new HTTPException(403, { message: '请在网页登录后更换邮箱' });
-    return hashToken(getCookie(c, cookieName) || '');
+    if (c.get('authKind') === 'token') throw new HTTPException(403, { message: '请在网页登录后更换邮箱' });
+    return c.get('sessionHash');
   };
   app.get('/api/account/email-change', c => {
     emailSessionHash(c);
@@ -284,9 +318,9 @@ export function createApp(db: DB, config: AppConfig) {
     const sessionHash = emailSessionHash(c);
     const input = await json(c, z.object({ requestId: z.string().uuid(), code: z.string().regex(/^\d{6}$/, '请输入 6 位验证码') }));
     const changed = emailChanges.confirm(c.get('user').id, sessionHash, input.requestId, input.code);
-    issueSession(c, changed.user.id);
+    const session=issueSession(c, changed.user.id);
     const noticeDelivered = await emailChanges.notify(changed.previousEmail, changed.user.email);
-    return c.json({ user: userView(db, changed.user), noticeDelivered });
+    return c.json({ user: userView(db, changed.user), noticeDelivered,...session });
   });
   app.delete('/api/account/email-change', c => {
     emailSessionHash(c);
@@ -346,12 +380,11 @@ export function createApp(db: DB, config: AppConfig) {
       db.prepare('DELETE FROM email_change_requests WHERE user_id=?').run(user.id);
       audit(db,user.id,'account.password',user.id,'更新密码并撤销已有会话与访问令牌');
     });
-    issueSession(c,user.id);
-    return c.json({ ok:true });
+    return c.json({ ok:true,...issueSession(c,user.id) });
   });
   app.get('/api/account/tokens',c=>c.json({ tokens:db.prepare('SELECT id,name,prefix,created_at AS createdAt,last_used_at AS lastUsedAt FROM api_tokens WHERE user_id=? ORDER BY created_at DESC').all(c.get('user').id) }));
   app.post('/api/account/tokens',async c => {
-    if (c.get('authKind')!=='session') throw new HTTPException(403, { message:'请在网页登录后管理令牌' });
+    if (c.get('authKind')==='token') throw new HTTPException(403, { message:'请在网页登录后管理令牌' });
     const input=await json(c,z.object({ name:nameSchema }));
     const count=db.prepare('SELECT COUNT(*) AS count FROM api_tokens WHERE user_id=?').get(c.get('user').id) as Row;
     if (count.count>=10) throw new HTTPException(400, { message:'最多创建 10 个访问令牌' });
@@ -360,14 +393,17 @@ export function createApp(db: DB, config: AppConfig) {
     return c.json({ token,entry:{ id,name:input.name,prefix:token.slice(0,10),createdAt,lastUsedAt:null } },201);
   });
   app.delete('/api/account/tokens/:id',c => {
-    if (c.get('authKind')!=='session') throw new HTTPException(403, { message:'请在网页登录后管理令牌' });
+    if (c.get('authKind')==='token') throw new HTTPException(403, { message:'请在网页登录后管理令牌' });
     db.prepare('DELETE FROM api_tokens WHERE id=? AND user_id=?').run(c.req.param('id'),c.get('user').id);
     return c.json({ ok:true });
   });
 
   app.use('/api/albums',authenticate);
   app.use('/api/albums/*',authenticate);
-  app.get('/api/albums',c=>c.json({ albums:db.prepare("SELECT a.id,a.name,a.created_at AS createdAt,COUNT(i.id) AS count FROM albums a LEFT JOIN images i ON i.album_id=a.id AND i.state='ready' WHERE a.user_id=? GROUP BY a.id ORDER BY a.created_at DESC").all(c.get('user').id) }));
+  app.get('/api/albums',c=>{
+    const rows=db.prepare("SELECT a.id,a.name,a.created_at AS createdAt,COUNT(i.id) AS count,(SELECT cover.id FROM images cover WHERE cover.album_id=a.id AND cover.user_id=a.user_id AND cover.state='ready' ORDER BY cover.created_at DESC,cover.id DESC LIMIT 1) AS coverId FROM albums a LEFT JOIN images i ON i.album_id=a.id AND i.user_id=a.user_id AND i.state='ready' WHERE a.user_id=? GROUP BY a.id ORDER BY a.created_at DESC,a.id DESC").all(c.get('user').id) as Row[];
+    return c.json({ albums:rows.map(({coverId,...album})=>({...album,coverUrl:coverId?`${config.publicUrl}/i/${coverId}`:null})) });
+  });
   app.post('/api/albums',async c => {
     const input=await json(c,z.object({ name:nameSchema }));
     if (db.prepare('SELECT id FROM albums WHERE user_id=? AND name=?').get(c.get('user').id,input.name)) throw new HTTPException(409, { message:'已有同名相册' });
@@ -376,6 +412,17 @@ export function createApp(db: DB, config: AppConfig) {
     const album={ id:randomUUID(),name:input.name,createdAt:now(),count:0 };
     db.prepare('INSERT INTO albums(id,user_id,name,created_at) VALUES(?,?,?,?)').run(album.id,c.get('user').id,album.name,album.createdAt);
     return c.json({ album },201);
+  });
+  app.patch('/api/albums/:id',async c=>{
+    const input=await json(c,z.object({name:nameSchema}));
+    const userId=c.get('user').id;
+    const album=db.prepare('SELECT id,name,created_at AS createdAt FROM albums WHERE id=? AND user_id=?').get(c.req.param('id'),userId) as Row|undefined;
+    if(!album) throw new HTTPException(404,{message:'相册不存在'});
+    if(db.prepare('SELECT id FROM albums WHERE user_id=? AND name=? AND id!=?').get(userId,input.name,album.id)) throw new HTTPException(409,{message:'已有同名相册'});
+    db.prepare('UPDATE albums SET name=? WHERE id=? AND user_id=?').run(input.name,album.id,userId);
+    audit(db,userId,'album.rename',album.id,input.name);
+    const count=(db.prepare("SELECT COUNT(*) AS count FROM images WHERE album_id=? AND user_id=? AND state='ready'").get(album.id,userId) as Row).count;
+    return c.json({album:{...album,name:input.name,count}});
   });
   app.delete('/api/albums/:id',c=>{
     db.prepare('DELETE FROM albums WHERE id=? AND user_id=?').run(c.req.param('id'),c.get('user').id);
@@ -475,7 +522,7 @@ export function createApp(db: DB, config: AppConfig) {
     if (!row || row.owner_status!=='active') throw new HTTPException(404, { message:'图片不存在' });
     if (row.visibility==='private') {
       await authenticate(c,async()=>{});
-      const moderator=c.get('user').role==='admin' && c.get('authKind')==='session';
+      const moderator=c.get('user').role==='admin' && c.get('authKind')!=='token';
       if (c.get('user').id!==row.user_id && !moderator) throw new HTTPException(404, { message:'图片不存在' });
     }
     const provider=storageRow(row.storage_id);

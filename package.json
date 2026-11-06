@@ -15,6 +15,7 @@
     "licenses:update": "node scripts/licenses.mjs --write",
     "licenses:check": "node scripts/licenses.mjs --check",
     "start": "node --env-file-if-exists=.env dist-server/server/index.js",
+    "preview:local": "node scripts/local-preview.mjs",
     "setup": "tsx server/setup.ts",
     "setup:production": "node --env-file-if-exists=.env dist-server/server/setup.js",
     "test": "tsx --test tests/*.test.ts",

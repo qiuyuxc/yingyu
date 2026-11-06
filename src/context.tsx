@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { Check, CircleAlert, X } from 'lucide-react';
 import type { SiteInfo, User } from '../shared/types';
 import { api, ApiError, errorMessage } from './api';
@@ -61,7 +61,7 @@ const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: Theme) => v
 export const useTheme = () => useContext(ThemeContext);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [palette, setPaletteState] = useState<Palette>(() => {
-    try { const value = localStorage.getItem('yingyu-palette'); return value === 'mono' || value === 'blue' ? value : 'green'; } catch { return 'green'; }
+    try { const value = localStorage.getItem('yingyu-palette'); return value === 'mono' || value === 'blue' || value === 'green' ? value : 'mono'; } catch { return 'mono'; }
   });
   const [theme, setThemeState] = useState<Theme>(() => {
     try { const value = localStorage.getItem('yingyu-theme'); return value === 'dark' || value === 'light' ? value : 'system'; } catch { return 'system'; }
@@ -73,8 +73,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     media.addEventListener('change', listener); return () => media.removeEventListener('change', listener);
   }, []);
   const dark = theme === 'dark' || (theme === 'system' && systemDark);
-  useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, [dark]);
-  useEffect(() => { document.documentElement.dataset.palette = palette; }, [palette]);
+  useLayoutEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, [dark]);
+  useLayoutEffect(() => { document.documentElement.dataset.palette = palette; }, [palette]);
   const setTheme = (value: Theme) => { setThemeState(value); try { localStorage.setItem('yingyu-theme', value); } catch { /* Private browser storage may be unavailable. */ } };
   const setPalette = (value: Palette) => { setPaletteState(value); try { localStorage.setItem('yingyu-palette', value); } catch { /* Private browser storage may be unavailable. */ } };
   return <ThemeContext value={{ theme, setTheme, dark, palette, setPalette }}>{children}</ThemeContext>;

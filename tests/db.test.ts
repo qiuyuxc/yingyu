@@ -25,7 +25,7 @@ test('a version-one database is migrated without losing an image or changing act
   assert.equal(image.name, 'image.png');
   assert.equal(image.state_changed_at, createdAt);
   assert.equal((db.prepare('SELECT id FROM storage_providers WHERE active=1').get() as Row).id, 'external');
-  assert.equal((db.prepare('PRAGMA user_version').get() as Row).user_version, 6);
+  assert.equal((db.prepare('PRAGMA user_version').get() as Row).user_version, 7);
   assert.equal(db.prepare('SELECT * FROM email_change_requests').all().length, 0);
   assert.ok((db.prepare('SELECT email_verified_at FROM users WHERE id=?').get(user.id) as Row).email_verified_at);
 });

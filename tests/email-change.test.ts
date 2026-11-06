@@ -24,7 +24,7 @@ async function setup(t: TestContext) {
   return { f, smtp, user, begin, confirm };
 }
 
-test('email changes require a web session, password, working mail configuration and an unused new address', async t => {
+test('email changes require a login session, password, working mail configuration and an unused new address', async t => {
   const { f, user, begin } = await setup(t);
   assert.equal((await f.json('/api/account/email-change', 'POST', { email: 'next@example.test', currentPassword: TEST_PASSWORD })).status, 401);
   const token = (await (await f.json('/api/account/tokens', 'POST', { name: 'uploader' }, user.cookie)).json()).token;
